@@ -4,6 +4,20 @@
 
 This repository contains a suite of **Composite GitHub Actions** designed to automate semantic version bumping for various project types (Python, Maven, NPM, etc.) within Pull Requests.
 
+## Requirements
+
+This project relies on the following software and tools:
+
+*   **[GitHub Actions Runner](https://github.com/actions/runner)**: Linux, macOS, or Windows runner.
+*   **[Git](https://git-scm.com/)**: Version control system.
+*   **[Node.js](https://nodejs.org/)**: Version 20 or higher (required for the action runtime).
+
+Depending on your project type, you will also need:
+
+*   **[Maven](https://maven.apache.org/)**: For Maven projects (requires `mvn` in the PATH).
+*   **[NPM](https://www.npmjs.com/)**: For Node.js projects (requires `npm` in the PATH).
+*   **[Python](https://www.python.org/) & [Poetry](https://python-poetry.org/)**: For Python projects (requires `poetry` in the PATH).
+
 ## GitHub Marketplace Usage
 
 You can use this action directly from the GitHub Marketplace. It supports multiple project types via the `type` input.
@@ -101,4 +115,4 @@ We as members, contributors, and leaders pledge to make participation in our com
 
 ## Licensing
 
-Copyright (20xx-)20xx SAP SE or an SAP affiliate company and <your-project> contributors. Please see our [LICENSE](LICENSE) for copyright and license information. Detailed information including third-party components and their licensing/copyright information is available [via the REUSE tool](https://api.reuse.software/info/github.com/SAP/<your-project>).
+Copyright (2025)2025 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors. Please see our [LICENSE](LICENSE) for copyright and license information. Detailed information including third-party components and their licensing/copyright information is available [via the REUSE tool](https://api.reuse.software/info/github.com/SAP/pull-request-semver-bumper).
