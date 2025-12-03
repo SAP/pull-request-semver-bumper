@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-dist:
-    runs-on: [solinas]
+    runs-on: [ubuntu-latest]
     permissions:
       contents: write
       pull-requests: write
