@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Python Version
-        uses: bnac-aas-adapter/version-bumping-action/.github/actions/version-bumping/python@main
+        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/python@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           post-command: "poetry lock --no-update"

@@ -9,7 +9,7 @@ This repository contains a suite of **Composite GitHub Actions** designed to aut
 You can use this action directly from the GitHub Marketplace. It supports multiple project types via the `type` input.
 
 ```yaml
-uses: SAP/pull-request-semver-bumper@main
+uses: sap/pull-request-semver-bumper@main
 with:
   type: 'npm' # Options: npm, maven, python, version-file
   token: ${{ secrets.GITHUB_TOKEN }}

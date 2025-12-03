@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Maven Version
-        uses: bnac-aas-adapter/version-bumping-action/.github/actions/version-bumping/maven@main
+        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 ```

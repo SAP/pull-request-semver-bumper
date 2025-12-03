@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump NPM Version
-        uses: bnac-aas-adapter/version-bumping-action/.github/actions/version-bumping/npm@main
+        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 ```

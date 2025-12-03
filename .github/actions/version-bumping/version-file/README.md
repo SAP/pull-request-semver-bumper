@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Version File
-        uses: bnac-aas-adapter/version-bumping-action/.github/actions/version-bumping/version-file@main
+        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version-file: "VERSION"

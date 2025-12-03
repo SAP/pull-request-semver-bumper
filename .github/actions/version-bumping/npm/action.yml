@@ -61,7 +61,7 @@ runs:
 
     - name: Bump up npm pr version
       id: bump
-      uses: ../../core
+      uses: ./.github/actions/core
       with:
         build-type: "npm"
         package-json-file: ${{ inputs.package-json-file }}
