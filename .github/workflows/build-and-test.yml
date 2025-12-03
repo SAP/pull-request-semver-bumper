@@ -63,7 +63,7 @@ jobs:
 
   test-python:
     needs: build-dist
-    runs-on: [solinas]
+    runs-on: [ubuntu-latest]
     permissions:
       contents: write
       pull-requests: read
@@ -89,7 +89,7 @@ jobs:
 
   test-npm:
     needs: build-dist
-    runs-on: [solinas]
+    runs-on: [ubuntu-latest]
     permissions:
       contents: write
       pull-requests: read
@@ -115,7 +115,7 @@ jobs:
 
   test-maven:
     needs: build-dist
-    runs-on: [solinas]
+    runs-on: [ubuntu-latest]
     permissions:
       contents: write
       pull-requests: read
@@ -143,7 +143,7 @@ jobs:
 
   test-version-file:
     needs: build-dist
-    runs-on: [solinas]
+    runs-on: [ubuntu-latest]
     permissions:
       contents: write
       pull-requests: read
