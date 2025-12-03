@@ -60,9 +60,9 @@ runs:
 
     - name: Bump up project version
       id: bump
-      uses: ./.github/actions/core
+      uses: ./
       with:
-        build-type: "python"
+        type: "python"
         pyproject-file: ${{ inputs.pyproject-file }}
         git-username: ${{ inputs.git-username }}
         git-useremail: ${{ inputs.git-useremail }}
