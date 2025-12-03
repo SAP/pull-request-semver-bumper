@@ -58,9 +58,9 @@ runs:
 
     - name: Bump up project version
       id: bump
-      uses: .
+      uses: ./.github/actions/core
       with:
-        type: "maven"
+        build-type: "maven"
         pom-file: ${{ inputs.pom-file }}
         git-username: ${{ inputs.git-username }}
         git-useremail: ${{ inputs.git-useremail }}

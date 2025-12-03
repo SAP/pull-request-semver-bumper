@@ -51,9 +51,9 @@ runs:
 
     - name: Bump up version file
       id: bump
-      uses: .
+      uses: ./.github/actions/core
       with:
-        type: "version-file"
+        build-type: "version-file"
         version-file: ${{ inputs.version-file }}
         git-username: ${{ inputs.git-username }}
         git-useremail: ${{ inputs.git-useremail }}
