@@ -55,8 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Python Version
-        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/python@main
+        uses: sap/pull-request-semver-bumper@main
         with:
+          type: python
           token: ${{ secrets.GITHUB_TOKEN }}
           post-command: "poetry lock --no-update"
 ```

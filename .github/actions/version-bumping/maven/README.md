@@ -68,7 +68,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Maven Version
-        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@main
+        uses: sap/pull-request-semver-bumper@main
         with:
+          type: maven
           token: ${{ secrets.GITHUB_TOKEN }}
 ```

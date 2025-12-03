@@ -49,7 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump NPM Version
-        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@main
+        uses: sap/pull-request-semver-bumper@main
         with:
+          type: npm
           token: ${{ secrets.GITHUB_TOKEN }}
 ```

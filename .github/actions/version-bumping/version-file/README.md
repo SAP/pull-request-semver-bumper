@@ -52,8 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Version File
-        uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@main
+        uses: sap/pull-request-semver-bumper@main
         with:
+          type: version-file
           token: ${{ secrets.GITHUB_TOKEN }}
           version-file: "VERSION"
 ```

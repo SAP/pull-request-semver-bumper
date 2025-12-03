@@ -77,6 +77,8 @@ These actions are **Composite Actions** that delegate the heavy lifting to a sha
 
 Select the action that matches your project type for specific configuration and usage instructions:
 
+> **Note:** The "Action Path" listed below is for reference. We recommend using the main Gateway Action (`sap/pull-request-semver-bumper@main`) with the appropriate `type` input.
+
 | Ecosystem | Action Path | Description |
 | :--- | :--- | :--- |
 | **[Python](.github/actions/version-bumping/python/README.md)** | `./.github/actions/version-bumping/python` | Supports `pyproject.toml` (Poetry). |
