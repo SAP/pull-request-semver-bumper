@@ -58,7 +58,7 @@ runs:
 
     - name: Bump up project version
       id: bump
-      uses: ./.github/actions/core
+      uses: sap/pull-request-semver-bumper/.github/actions/core@main
       with:
         build-type: "maven"
         pom-file: ${{ inputs.pom-file }}

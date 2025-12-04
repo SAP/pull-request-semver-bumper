@@ -73,6 +73,10 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      - name: Patch composite actions for E2E
+        run: |
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/python@[^[:space:]"]+|./.github/actions/version-bumping/python|g' action.yml
       - name: Test Python Action (Dry Run)
         id: version_bump
         uses: ./
@@ -100,6 +104,10 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      - name: Patch composite actions for E2E
+        run: |
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@[^[:space:]"]+|./.github/actions/version-bumping/npm|g' action.yml
       - name: Test NPM Action (Dry Run)
         id: version_bump
         uses: ./
@@ -127,6 +135,10 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      - name: Patch composite actions for E2E
+        run: |
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@[^[:space:]"]+|./.github/actions/version-bumping/maven|g' action.yml
       - name: Test Maven Action (Dry Run)
         id: version_bump
         uses: ./
@@ -156,6 +168,10 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      - name: Patch composite actions for E2E
+        run: |
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@[^[:space:]"]+|./.github/actions/version-bumping/version-file|g' action.yml
       - name: Test Version File Action (Dry Run)
         id: version_bump
         uses: ./

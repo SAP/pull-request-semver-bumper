@@ -68,16 +68,10 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Copy Actions to Workspace
-      shell: bash
-      # FIXME: workaround until will be merged: https://github.com/actions/runner/pull/1684
-      # original ref: https://github.com/hoverkraft-tech/ci-github-common/issues/161
-      run: |
-        [ -d .github/actions ] || (mkdir -p .github/actions && cp -r $GITHUB_ACTION_PATH/.github/actions/* .github/actions/)
     - name: Bump Maven
       if: inputs.type == 'maven'
       id: bump_maven
-      uses: ./.github/actions/version-bumping/maven
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@main
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -92,7 +86,7 @@ runs:
     - name: Bump NPM
       if: inputs.type == 'npm'
       id: bump_npm
-      uses: ./.github/actions/version-bumping/npm
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@main
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -106,7 +100,7 @@ runs:
     - name: Bump Python
       if: inputs.type == 'python'
       id: bump_python
-      uses: ./.github/actions/version-bumping/python
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/python@main
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -120,7 +114,7 @@ runs:
     - name: Bump Version File
       if: inputs.type == 'version-file'
       id: bump_version_file
-      uses: ./.github/actions/version-bumping/version-file
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@main
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
