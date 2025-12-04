@@ -33,7 +33,7 @@ jobs:
               id: changelog
               uses: mikepenz/release-changelog-builder-action@v5
               with:
-                  # Using default configuration since configuration.json does not exist
+                  configuration: "configuration.json"
                   mode: "COMMIT"
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
