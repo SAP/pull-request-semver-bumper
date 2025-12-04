@@ -190,3 +190,31 @@ jobs:
             echo "Error: 'bumped' output is empty"
             exit 1
           fi
+
+  all-tests-passed:
+    if: always()
+    needs: [build-dist, test-python, test-npm, test-maven, test-version-file]
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [[ ${{ contains(needs.*.result, 'failure') }} == 'true' || ${{ contains(needs.*.result, 'cancelled') }} == 'true' ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Commit Status
+        uses: myrotvorets/set-commit-status-action@master
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: ${{ steps.status.outputs.status }}
+          context: "all-tests-passed"
+          description: "Aggregation of all tests"
+
+      - name: Fail if needed
+        if: steps.status.outputs.status == 'failure'
+        run: exit 1
