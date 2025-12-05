@@ -1,5 +1,7 @@
 # Pull Request Semver Bumper
 
+[![REUSE status](https://api.reuse.software/badge/github.com/SAP/pull-request-semver-bumper)](https://api.reuse.software/info/github.com/SAP/pull-request-semver-bumper)
+
 ## About this project
 
 This repository contains a suite of **Composite GitHub Actions** designed to automate semantic version bumping for various project types (Python, Maven, NPM, etc.) within Pull Requests.
