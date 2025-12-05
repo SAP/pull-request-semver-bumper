@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Python Version
-        uses: sap/pull-request-semver-bumper@main
+        uses: sap/pull-request-semver-bumper@v1
         with:
           type: python
           token: ${{ secrets.GITHUB_TOKEN }}

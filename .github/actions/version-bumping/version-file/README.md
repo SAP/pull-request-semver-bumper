@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump Version File
-        uses: sap/pull-request-semver-bumper@main
+        uses: sap/pull-request-semver-bumper@v1
         with:
           type: version-file
           token: ${{ secrets.GITHUB_TOKEN }}
