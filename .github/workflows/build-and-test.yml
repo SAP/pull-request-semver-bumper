@@ -8,6 +8,7 @@ on:
       - opened
       - synchronize
       - reopened
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -46,7 +47,7 @@ jobs:
         run: npm run build
 
       - name: Commit build artifacts (same-repo PRs only)
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: EndBug/add-and-commit@v9
         with:
           add: "."
@@ -55,7 +56,7 @@ jobs:
           push: true
 
       - name: Fail if dist is dirty (Forked PRs only)
-        if: github.event.pull_request.head.repo.full_name != github.repository
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         working-directory: .github/actions/core
         run: |
           if [[ -n $(git status --porcelain dist) ]]; then
