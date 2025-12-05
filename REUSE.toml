@@ -13,7 +13,9 @@ path = [
     "CONTRIBUTING.md",
     ".gitignore",
     ".husky/**",
-    "package-lock.json"
+    "package-lock.json",
+    "configuration.json",
+    "CHANGELOG.md"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors"
