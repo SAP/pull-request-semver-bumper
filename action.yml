@@ -1,4 +1,4 @@
-name: "pull request semver bumper"
+name: "Version Bumping Action"
 description: "Automated semantic version bumping for Maven, NPM, Python, and generic projects."
 branding:
   icon: "git-merge"
