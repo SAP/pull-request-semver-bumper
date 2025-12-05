@@ -3,3 +3,4 @@
 /.github/actions/core/coverage/
 .idea/*
 .vscode/*
+/test
