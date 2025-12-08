@@ -4,28 +4,36 @@
 
 ## About this project
 
-This repository contains a suite of **Composite GitHub Actions** designed to automate semantic version bumping for various project types (Python, Maven, NPM, etc.) within Pull Requests.
+This repository provides a suite of **Composite GitHub Actions** that automate semantic version bumping directly within your Pull Requests. By handling versioning before the merge, it ensures your `main` branch is always clean, versioned, and ready for deployment.
+
+## Why use this Action?
+
+Most versioning tools run *after* a merge, creating a separate "release commit" that clutters your history and triggers extra CI runs. **Pull Request Semver Bumper** is different:
+
+* **Bump in PR**: The version bump happens inside the Pull Request. When you merge, the version is already updated. No extra commits, no race conditions.
+* **Multi-Language Support**: One unified workflow for **Maven**, **NPM**, **Python**, and generic **Version Files**.
+* **Standardized**: Fully compliant with [Conventional Commits](https://www.conventionalcommits.org/). Your commit history becomes your changelog.
 
 ## Requirements
 
 This project relies on the following software and tools:
 
-*   **[GitHub Actions Runner](https://github.com/actions/runner)**: Linux, macOS, or Windows runner.
-*   **[Git](https://git-scm.com/)**: Version control system.
-*   **[Node.js](https://nodejs.org/)**: Version 20 or higher (required for the action runtime).
+* **[GitHub Actions Runner](https://github.com/actions/runner)**: Linux, macOS, or Windows runner.
+* **[Git](https://git-scm.com/)**: Version control system.
+* **[Node.js](https://nodejs.org/)**: Version 20 or higher (required for the action runtime).
 
 Depending on your project type, you will also need:
 
-*   **[Maven](https://maven.apache.org/)**: For Maven projects (requires `mvn` in the PATH).
-*   **[NPM](https://www.npmjs.com/)**: For Node.js projects (requires `npm` in the PATH).
-*   **[Python](https://www.python.org/) & [Poetry](https://python-poetry.org/)**: For Python projects (requires `poetry` in the PATH).
+* **[Maven](https://maven.apache.org/)**: For Maven projects (requires `mvn` in the PATH).
+* **[NPM](https://www.npmjs.com/)**: For Node.js projects (requires `npm` in the PATH).
+* **[Python](https://www.python.org/) & [Poetry](https://python-poetry.org/)**: For Python projects (requires `poetry` in the PATH).
 
 ## GitHub Marketplace Usage
 
 You can use this action directly from the GitHub Marketplace. It supports multiple project types via the `type` input.
 
 ```yaml
-uses: sap/pull-request-semver-bumper@main
+uses: sap/pull-request-semver-bumper@v1
 with:
   type: 'npm' # Options: npm, maven, python, version-file
   token: ${{ secrets.GITHUB_TOKEN }}
@@ -50,11 +58,10 @@ with:
 | `pyproject-file` | Path to pyproject.toml (python only). | `pyproject.toml` | No |
 | `version-file` | Path to version file (version-file only). | `VERSION` | No |
 
-
-
 ## Contributing
 
 ### Forked Repositories
+
 If you are contributing from a forked repository, you **must** run `npm run build` in `.github/actions/core` and commit the changes to the `dist/` folder before pushing.
 The CI workflow cannot automatically push changes to your fork due to GitHub security restrictions.
 
@@ -62,14 +69,16 @@ We have included a `pre-commit` hook (using `husky`) that will automatically bui
 The hook is located in the project root (`.husky/`) and is automatically configured when you run `npm install` in `.github/actions/core`.
 
 ### Local Development
-1.  Install dependencies: `cd .github/actions/core && npm install`
-    *   This will also set up the git hooks in the project root.
-2.  Make changes.
-3.  The pre-commit hook will handle the build.
+
+1. Install dependencies: `cd .github/actions/core && npm install`
+    * This will also set up the git hooks in the project root.
+2. Make changes.
+3. The pre-commit hook will handle the build.
 
 ## Core Concepts
 
 ### 1. Semantic Versioning via PR Titles
+
 All actions in this suite rely on [Conventional Commits](https://www.conventionalcommits.org/) to determine the version bump level. The Pull Request title is analyzed to decide whether to perform a major, minor, or patch bump.
 
 | PR Title Example | Bump Type | Result Example |
@@ -82,18 +91,20 @@ All actions in this suite rely on [Conventional Commits](https://www.conventiona
 > **⚠️ Important:** If the PR title does not follow the Conventional Commits specification, the action will fail, and no version bump will occur.
 
 ### 2. Architecture
+
 These actions are **Composite Actions** that delegate the heavy lifting to a shared core action (`.github/actions/core`).
-- **Validation:** Checks PR title semantics.
-- **Version Extraction:** Reads the current version from the project file (e.g., `pom.xml`, `package.json`).
-- **Calculation:** Computes the next version based on the PR title.
-- **Execution:** Runs the ecosystem-specific bump command.
-- **Commit & Push:** Commits the change back to the PR branch.
+
+* **Validation:** Checks PR title semantics.
+* **Version Extraction:** Reads the current version from the project file (e.g., `pom.xml`, `package.json`).
+* **Calculation:** Computes the next version based on the PR title.
+* **Execution:** Runs the ecosystem-specific bump command.
+* **Commit & Push:** Commits the change back to the PR branch.
 
 ## Supported Ecosystems
 
 Select the action that matches your project type for specific configuration and usage instructions:
 
-> **Note:** The "Action Path" listed below is for reference. We recommend using the main Gateway Action (`sap/pull-request-semver-bumper@main`) with the appropriate `type` input.
+> **Note:** The "Action Path" listed below is for reference. We recommend using the Gateway Action (`sap/pull-request-semver-bumper@v1`) with the appropriate `type` input.
 
 | Ecosystem | Action Path | Description |
 | :--- | :--- | :--- |
@@ -109,6 +120,7 @@ For detailed documentation on specific ecosystem behaviors, click the links abov
 This project is open to feature requests/suggestions, bug reports etc. via [GitHub issues](https://github.com/SAP/pull-request-semver-bumper/issues). Contribution and feedback are encouraged and always welcome. For more information about how to contribute, the project structure, as well as additional contribution information, see our [Contribution Guidelines](CONTRIBUTING.md).
 
 ## Security / Disclosure
+
 If you find any bug that may be a security problem, please follow our instructions at [in our security policy](https://github.com/SAP/pull-request-semver-bumper/security/policy) on how to report it. Please do not create GitHub issues for security-related doubts or problems.
 
 ## Code of Conduct
