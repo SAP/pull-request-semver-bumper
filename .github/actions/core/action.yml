@@ -4,8 +4,8 @@ description: Automated version bump, only recommend to run in PRs.
 inputs:
   build-type:
     description: "Build type, currently maven and npm are supported"
-    default: "maven"
-    required: false
+    default: ""
+    required: true
   pom-file:
     description: "Where to find the pom file, only relevant for buildType maven"
     default: "pom.xml"
