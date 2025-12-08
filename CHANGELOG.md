@@ -1,5 +1,5 @@
 
-## [1.0.0] - 2025-12-04
+## [1.0.0] - 2025-12-08
 
 # Changelog
 
@@ -18,6 +18,7 @@
 - fix: correctly copy action contents to the workspace instead of the directory itself.
 - fix: correctly copy action directory contents to workspace (#12)
 - fix: correctly copy action directory contents to workspace instead of the directory itself.
+- fix: fix calling branch in documentation (#22)
 - fix: remove angle brackets from SPDX fields in REUSE.toml
 - fix: update workflow group (#7)
 - fix: use external invoking for sub-actions (#13)
@@ -47,10 +48,12 @@
 
 ## 📝 Documentation
 
+- docs: add issue templates and reuse api badege (#21)
 - docs: add project name into copyright place holder (#5)
 - docs: add requirements section and update licensing link in README (#10)
 - docs: add requirements section and update licensing link in README.
 - docs: update Maven README (#3)
 - docs: update Maven README to remove outdated credential example and add Nexus env vars to main usage.
+- docs: update readme highlighting USP and update meta information (#23)
 
 
