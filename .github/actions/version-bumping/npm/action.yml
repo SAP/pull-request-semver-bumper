@@ -61,7 +61,7 @@ runs:
 
     - name: Bump up npm pr version
       id: bump
-      uses: sap/pull-request-semver-bumper/.github/actions/core@main
+      uses: sap/pull-request-semver-bumper/.github/actions/core@v1
       with:
         build-type: "npm"
         package-json-file: ${{ inputs.package-json-file }}

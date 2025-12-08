@@ -51,7 +51,7 @@ runs:
 
     - name: Bump up version file
       id: bump
-      uses: sap/pull-request-semver-bumper/.github/actions/core@main
+      uses: sap/pull-request-semver-bumper/.github/actions/core@v1
       with:
         build-type: "version-file"
         version-file: ${{ inputs.version-file }}
