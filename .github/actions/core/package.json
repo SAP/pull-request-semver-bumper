@@ -1,5 +1,5 @@
 {
-  "name": "version-bump-action",
+  "name": "pull-request-semver-bumper-core",
   "version": "1.0.0",
   "main": "dist/index.js",
   "scripts": {
