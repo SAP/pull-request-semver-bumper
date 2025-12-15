@@ -9,7 +9,7 @@
     "prepare": "cd ../../ && husky"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
+    "@actions/core": "^2.0.1",
     "@actions/exec": "^1.1.1",
     "actions-toolkit": "^6.0.1",
     "mentions-regex": "^2.0.3",
