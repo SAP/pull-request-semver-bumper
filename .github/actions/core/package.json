@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@actions/core": "^2.0.1",
-    "@actions/exec": "^1.1.1",
+    "@actions/exec": "^2.0.0",
     "actions-toolkit": "^6.0.1",
     "mentions-regex": "^2.0.3",
     "parse-commit-message": "^5.0.4",
