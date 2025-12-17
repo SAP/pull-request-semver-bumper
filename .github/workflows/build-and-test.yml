@@ -19,6 +19,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -47,6 +49,7 @@ jobs:
 
       - name: Commit build artifacts (same-repo PRs only)
         if: github.event.pull_request.head.repo.full_name == github.repository
+        id: commit_dist
         uses: EndBug/add-and-commit@v9
         with:
           add: "."
@@ -212,6 +215,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: ${{ steps.status.outputs.status }}
+          sha: ${{ needs.build-dist.outputs.committed_sha || github.event.pull_request.head.sha }}
           context: "all-tests-passed"
           description: "Aggregation of all tests"
 
