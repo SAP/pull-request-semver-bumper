@@ -51,6 +51,7 @@ async function run(): Promise<void> {
         const currentVersion = await fetchCurrentVersion(git, buildType, files, defaultBranch,versionPropertyPath);
         const level = determineVersionLevelFromPRTitle(prTitle);
         const newVersion = bumpVersion(currentVersion, level);
+        core.setOutput('bump', level);
 
         await updateLocalVersion(
             buildType,

@@ -58,6 +58,12 @@ with:
 | `pyproject-file` | Path to pyproject.toml (python only). | `pyproject.toml` | No |
 | `version-file` | Path to version file (version-file only). | `VERSION` | No |
 
+### Outputs
+
+- `bumped`: True if version was bumped
+- `new-version`: The new version number
+- `bump`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+
 ## Contributing
 
 ### Forked Repositories
