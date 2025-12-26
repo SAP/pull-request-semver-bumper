@@ -179,6 +179,7 @@ async function run() {
         const currentVersion = await (0, fetch_version_1.fetchCurrentVersion)(git, buildType, files, defaultBranch, versionPropertyPath);
         const level = (0, parse_commit_1.determineVersionLevelFromPRTitle)(prTitle);
         const newVersion = (0, bump_version_1.bumpVersion)(currentVersion, level);
+        core.setOutput('bump', level);
         await (0, update_version_1.updateLocalVersion)(buildType, core.getInput('bump-command') || '', newVersion, files);
         if (postCommand) {
             core.info(`Executing post-command: ${postCommand}`);
