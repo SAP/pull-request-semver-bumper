@@ -64,6 +64,9 @@ outputs:
   new-version:
     description: "The new version"
     value: ${{ steps.bump_maven.outputs.new-version || steps.bump_npm.outputs.new-version || steps.bump_python.outputs.new-version || steps.bump_version_file.outputs.new-version }}
+  bumpLevel:
+    description: "The computed SemVer bump level (major, minor, patch)"
+    value: ${{ steps.bump_maven.outputs.bumpLevel || steps.bump_npm.outputs.bumpLevel || steps.bump_python.outputs.bumpLevel || steps.bump_version_file.outputs.bumpLevel }}
 
 runs:
   using: "composite"

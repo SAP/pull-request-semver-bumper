@@ -41,6 +41,9 @@ outputs:
   new-version:
     description: "The new version"
     value: ${{ steps.bump.outputs.new-version }}
+  bumpLevel:
+    description: "The computed SemVer bump level (major, minor, patch)"
+    value: ${{ steps.bump.outputs.bumpLevel }}
 
 runs:
   using: composite

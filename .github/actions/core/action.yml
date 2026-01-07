@@ -58,6 +58,8 @@ outputs:
     description: "True if version was bumped"
   new-version:
     description: "The new version"
+  bumpLevel:
+    description: "The computed SemVer bump level (major, minor, patch)"
 
 runs:
   using: node20
