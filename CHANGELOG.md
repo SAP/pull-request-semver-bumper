@@ -1,3 +1,13 @@
+
+## [1.0.1] - 2026-01-07
+
+# Changelog
+
+## 🧰 Maintenance
+
+- chore: update changelog for v1.0.0 (#26)
+
+
 ## [1.0.0] - 2025-12-08
 
 # Changelog
