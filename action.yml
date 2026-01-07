@@ -74,7 +74,7 @@ runs:
     - name: Bump Maven
       if: inputs.type == 'maven'
       id: bump_maven
-      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@main
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@v1
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -89,7 +89,7 @@ runs:
     - name: Bump NPM
       if: inputs.type == 'npm'
       id: bump_npm
-      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@main
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@v1
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -103,7 +103,7 @@ runs:
     - name: Bump Python
       if: inputs.type == 'python'
       id: bump_python
-      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/python@main
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/python@v1
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
@@ -117,7 +117,7 @@ runs:
     - name: Bump Version File
       if: inputs.type == 'version-file'
       id: bump_version_file
-      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@main
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@v1
       with:
         token: ${{ inputs.token }}
         dry-run: ${{ inputs.dry-run }}
