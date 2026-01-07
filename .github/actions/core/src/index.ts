@@ -51,7 +51,7 @@ async function run(): Promise<void> {
         const currentVersion = await fetchCurrentVersion(git, buildType, files, defaultBranch,versionPropertyPath);
         const level = determineVersionLevelFromPRTitle(prTitle);
         const newVersion = bumpVersion(currentVersion, level);
-        core.setOutput('bump', level);
+        core.setOutput('bumpLevel', level);
 
         await updateLocalVersion(
             buildType,
@@ -82,6 +82,7 @@ async function run(): Promise<void> {
             core.summary.addDetails("Version Bump", `Bumped version from ${currentVersion} to ${newVersion}`);
             core.setOutput('new-version', newVersion);
             core.setOutput('bumped', true);
+            core.setOutput("bumpLevel", level);
         } else {
             core.info('No changes detected, skipping commit and push.');
             core.setOutput('bumped', false);

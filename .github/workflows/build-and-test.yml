@@ -93,6 +93,7 @@ jobs:
         run: |
           echo "Bumped: ${{ steps.version_bump.outputs.bumped }}"
           echo "New Version: ${{ steps.version_bump.outputs.new-version }}"
+          echo "Bump Level: ${{ steps.version_bump.outputs.bumpLevel }}"
           echo "### Python Test New Version: ${{ steps.version_bump.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ steps.version_bump.outputs.bumped }}" ]; then
             echo "Error: 'bumped' output is empty"
@@ -124,6 +125,7 @@ jobs:
         run: |
           echo "Bumped: ${{ steps.version_bump.outputs.bumped }}"
           echo "New Version: ${{ steps.version_bump.outputs.new-version }}"
+          echo "Bump Level: ${{ steps.version_bump.outputs.bumpLevel }}"
           echo "### NPM Test New Version: ${{ steps.version_bump.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ steps.version_bump.outputs.bumped }}" ]; then
             echo "Error: 'bumped' output is empty"
@@ -157,6 +159,7 @@ jobs:
         run: |
           echo "Bumped: ${{ steps.version_bump.outputs.bumped }}"
           echo "New Version: ${{ steps.version_bump.outputs.new-version }}"
+          echo "Bump Level: ${{ steps.version_bump.outputs.bumpLevel }}"
           echo "### Maven Test New Version: ${{ steps.version_bump.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ steps.version_bump.outputs.bumped }}" ]; then
             echo "Error: 'bumped' output is empty"
@@ -188,6 +191,7 @@ jobs:
         run: |
           echo "Bumped: ${{ steps.version_bump.outputs.bumped }}"
           echo "New Version: ${{ steps.version_bump.outputs.new-version }}"
+          echo "Bump Level: ${{ steps.version_bump.outputs.bumpLevel }}"
           echo "### Version File Test New Version: ${{ steps.version_bump.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
           if [ -z "${{ steps.version_bump.outputs.bumped }}" ]; then
             echo "Error: 'bumped' output is empty"
