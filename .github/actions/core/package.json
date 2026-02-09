@@ -15,7 +15,7 @@
     "mentions-regex": "^2.0.3",
     "parse-commit-message": "^5.0.4",
     "pom-parser": "^1.2.0",
-    "semver": "^7.6.3",
+    "semver": "^7.7.4",
     "simple-git": "^3.27.0"
   },
   "devDependencies": {
