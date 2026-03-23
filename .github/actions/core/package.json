@@ -15,12 +15,12 @@
     "mentions-regex": "^2.0.3",
     "parse-commit-message": "^5.0.4",
     "pom-parser": "^1.2.0",
-    "semver": "^7.6.3",
+    "semver": "^7.7.4",
     "simple-git": "^3.27.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.0.3",
+    "@types/node": "^25.2.3",
     "@types/semver": "^7.7.1",
     "@vercel/ncc": "^0.38.4",
     "husky": "^9.1.7",
