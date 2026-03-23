@@ -1,3 +1,20 @@
+
+## [1.0.1] - 2026-01-07
+
+# Changelog
+
+## 🚀 Features
+
+- feat: Expose bump level as output (#33)
+
+## 🧰 Maintenance
+
+- chore: update changelog for v1.0.0 (#26)
+- chore(deps-dev): bump @types/node from 24.10.1 to 25.0.2 in /.github/actions/core (#29)
+- chore(deps): bump @actions/core from 1.11.1 to 2.0.1 in /.github/actions/core (#28)
+- chore(deps): bump @actions/exec from 1.1.1 to 2.0.0 in /.github/actions/core (#27)
+- chore(deps-dev): bump @types/node from 25.0.2 to 25.0.3 in /.github/actions/core (#32)
+
 ## [1.0.0] - 2025-12-08
 
 # Changelog
