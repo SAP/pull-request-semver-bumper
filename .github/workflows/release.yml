@@ -29,17 +29,27 @@ jobs:
               with:
                   fetch-depth: 0
 
+            - name: Get Previous Tag
+              id: prev_tag
+              run: |
+                  # Get the most recent tag, or use empty string for first release
+                  PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+                  echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
+                  echo "Previous tag: $PREV_TAG"
+
             - name: Generate Changelog
               id: changelog
               uses: mikepenz/release-changelog-builder-action@v5
               with:
                   configuration: "configuration.json"
                   mode: "COMMIT"
+                  fromTag: ${{ steps.prev_tag.outputs.tag }}
                   toTag: "HEAD"
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Create Changelog PR
+            - name: Create Changelog PR and Merge
+              id: changelog_pr
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
@@ -49,49 +59,90 @@ jobs:
                   BRANCH_NAME="chore/changelog-v$VERSION"
                   git checkout -b "$BRANCH_NAME"
 
-                  # Append changelog to CHANGELOG.md (create if not exists)
+                  # Prepend changelog to CHANGELOG.md (create if not exists)
                   touch CHANGELOG.md
-                  echo -e "\n## [$VERSION] - $(date +%Y-%m-%d)\n" >> CHANGELOG.md.tmp
-                  echo "${{ steps.changelog.outputs.changelog }}" >> CHANGELOG.md.tmp
-                  cat CHANGELOG.md >> CHANGELOG.md.tmp
+                  {
+                    echo -e "## [$VERSION] - $(date +%Y-%m-%d)\n"
+                    echo "${{ steps.changelog.outputs.changelog }}"
+                    echo ""
+                    cat CHANGELOG.md
+                  } > CHANGELOG.md.tmp
                   mv CHANGELOG.md.tmp CHANGELOG.md
 
                   git add CHANGELOG.md
                   git commit -m "chore: update changelog for v$VERSION"
                   git push origin "$BRANCH_NAME"
 
-                  gh pr create \
+                  # Create PR and capture the URL
+                  PR_URL=$(gh pr create \
                     --title "chore: update changelog for v$VERSION" \
                     --body "Automated changelog update for release v$VERSION" \
                     --base main \
-                    --head "$BRANCH_NAME"
+                    --head "$BRANCH_NAME")
 
-            - name: Create Release Branch
+                  echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+
+                  # Enable auto-merge (requires auto-merge to be enabled in repo settings)
+                  gh pr merge "$PR_URL" --auto --squash
+
+            - name: Wait for PR to be Merged
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
-                  git checkout main
-                  git pull origin main
+                  PR_URL="${{ steps.changelog_pr.outputs.pr_url }}"
+                  echo "Waiting for PR to be merged: $PR_URL"
+
+                  # Wait for up to 5 minutes for the PR to be merged
+                  for i in {1..30}; do
+                    STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+                    echo "PR state: $STATE (attempt $i/30)"
+
+                    if [ "$STATE" = "MERGED" ]; then
+                      echo "PR has been merged!"
+                      break
+                    elif [ "$STATE" = "CLOSED" ]; then
+                      echo "::error::PR was closed without merging"
+                      exit 1
+                    fi
+
+                    sleep 10
+                  done
+
+                  # Final check
+                  STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+                  if [ "$STATE" != "MERGED" ]; then
+                    echo "::error::PR was not merged within the timeout period. Current state: $STATE"
+                    exit 1
+                  fi
+
+            - name: Checkout Updated Main
+              uses: actions/checkout@v4
+              with:
+                  ref: main
+                  fetch-depth: 0
+
+            - name: Update References for Release
+              run: |
+                  # Create a release branch from updated main
                   git checkout -b "release/v$VERSION"
 
-            - name: Update References
-              run: |
                   # Replace @main with @v{major} in action.yml and sub-actions
-                  # We use a broad sed to catch occurrences in both action.yml and sub-action files
                   find . -name "action.yml" -print0 | xargs -0 sed -i "s|@main|@v$MAJOR_VERSION|g"
 
                   # Verify if any changes were made
                   git diff
 
-            - name: Commit and Push Release Branch
+            - name: Commit Release Changes
               run: |
-                  git add .
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
                   # Only commit if there are changes
-                  if ! git diff --quiet --cached; then
+                  if ! git diff --quiet; then
+                    git add .
                     git commit -m "chore: prepare release v$VERSION"
-                    git push origin "release/v$VERSION"
                   else
                     echo "No changes to commit (references might already be correct or using relative paths)."
-                    # We still push the branch to tag it
-                    git push origin "release/v$VERSION"
                   fi
 
             - name: Tagging
@@ -118,5 +169,5 @@ jobs:
             - name: Cleanup
               if: always()
               run: |
-                  # Delete the release branch
-                  git push origin --delete "release/v$VERSION" || true
+                  # Delete the changelog branch if it still exists
+                  git push origin --delete "chore/changelog-v$VERSION" || true
