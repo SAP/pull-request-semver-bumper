@@ -16,7 +16,7 @@
     "parse-commit-message": "^5.0.4",
     "pom-parser": "^1.2.0",
     "semver": "^7.7.4",
-    "simple-git": "^3.27.0"
+    "simple-git": "^3.33.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
