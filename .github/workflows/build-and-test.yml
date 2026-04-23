@@ -50,7 +50,7 @@ jobs:
       - name: Commit build artifacts (same-repo PRs only)
         if: github.event.pull_request.head.repo.full_name == github.repository
         id: commit_dist
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v10
         with:
           add: "."
           message: "chore: build core action dist (auto)"
