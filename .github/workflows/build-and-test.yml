@@ -32,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20 # use stable LTS; previous 24 caused manifest warning
+          node-version: 24 # use stable LTS; previous 24 caused manifest warning
           check-latest: true
 
       - name: Install dependencies
