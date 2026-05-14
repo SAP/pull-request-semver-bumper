@@ -1,6 +1,7 @@
-import { updateLocalVersion } from './update-version';
-import { BUILD_TYPE } from '../types/build-type';
-import { executeCommand } from '../utils/executeCommand';
+import { jest } from '@jest/globals';
+import { updateLocalVersion } from './update-version.js';
+import { BUILD_TYPE } from '../types/build-type.js';
+import { executeCommand } from '../utils/executeCommand.js';
 
 jest.mock('../utils/executeCommand');
 const mockExecute = executeCommand as jest.Mock;
