@@ -5,12 +5,7 @@ export default {
     verbose: true,
     transform: {
         '^.+\\.tsx?$': ['ts-jest', {
-            tsconfig: {
-                module: 'CommonJS',
-                moduleResolution: 'node',
-                target: 'ES2019',
-                esModuleInterop: true,
-            },
+            tsconfig: '<rootDir>/tsconfig.test.json',
         }],
     },
     moduleNameMapper: {
