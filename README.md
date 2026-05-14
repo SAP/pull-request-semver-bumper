@@ -62,7 +62,7 @@ with:
 
 - `bumped`: True if version was bumped
 - `new-version`: The new version number
-- `bump`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+- `bumpLevel`: The computed SemVer bump level (`major`, `minor`, or `patch`)
 
 ## Contributing
 
