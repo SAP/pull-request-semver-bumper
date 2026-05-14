@@ -1,4 +1,4 @@
-import { bumpVersion } from './bump-version';
+import { bumpVersion } from './bump-version.js';
 
 describe('bumpVersion', () => {
     it('should bump major version', () => {

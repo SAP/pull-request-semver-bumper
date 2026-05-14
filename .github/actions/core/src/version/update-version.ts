@@ -7,9 +7,9 @@
 
 import { exec } from "child_process";
 import * as core from "@actions/core";
-import { BUILD_TYPE } from "../types/build-type";
+import { BUILD_TYPE } from "../types/build-type.js";
 import * as path from "path";
-import { executeCommand } from "../utils/executeCommand";
+import { executeCommand } from "../utils/executeCommand.js";
 
 /**
  * Update the local version for a given build system by executing a templated bump command.

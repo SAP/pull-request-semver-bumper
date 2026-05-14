@@ -1,5 +1,5 @@
 import * as semver from 'semver';
-import { VersionLevel } from '../utils/parse-commit';
+import { VersionLevel } from '../utils/parse-commit.js';
 
 export function bumpVersion(
     current: string,
