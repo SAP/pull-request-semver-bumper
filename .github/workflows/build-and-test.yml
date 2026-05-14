@@ -23,14 +23,14 @@ jobs:
       committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN}}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24 # use stable LTS; previous 24 caused manifest warning
           check-latest: true
@@ -75,7 +75,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -107,7 +107,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -139,7 +139,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -173,7 +173,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml

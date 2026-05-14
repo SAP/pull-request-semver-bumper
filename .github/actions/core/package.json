@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@actions/core": "^2.0.2",
-    "@actions/exec": "^2.0.0",
+    "@actions/exec": "^3.0.0",
     "actions-toolkit": "^6.0.1",
     "mentions-regex": "^2.0.3",
     "parse-commit-message": "^5.0.4",
@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.2.3",
+    "@types/node": "^25.6.2",
     "@types/semver": "^7.7.1",
     "@vercel/ncc": "^0.38.4",
     "husky": "^9.1.7",
