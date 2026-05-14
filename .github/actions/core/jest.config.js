@@ -7,7 +7,6 @@ export default {
         '^.+\\.tsx?$': ['ts-jest', {
             tsconfig: {
                 module: 'CommonJS',
-                moduleResolution: 'node',
                 target: 'ES2019',
                 esModuleInterop: true,
             },
