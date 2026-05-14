@@ -53,9 +53,9 @@ runs:
         GITHUB_TOKEN: ${{ inputs.token }}
 
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
-        node-version: 20 # use stable LTS; previous 24 caused manifest warning
+        node-version: 24 # use stable LTS; previous 24 caused manifest warning
         check-latest: true
 
     - name: Install pnpm and yarn
