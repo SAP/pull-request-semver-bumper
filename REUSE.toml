@@ -6,6 +6,7 @@ SPDX-PackageComment = "The code in this project may include calls to APIs (\"API
 
 [[annotations]]
 path = [
+    ".claude/**",
     ".github/**",
     "action.yml",
     "test-resources/**",
@@ -15,7 +16,8 @@ path = [
     ".husky/**",
     "package-lock.json",
     "configuration.json",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "renovate.json"
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors"
