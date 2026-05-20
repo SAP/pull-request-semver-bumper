@@ -1,8 +1,9 @@
-import { parsePom } from './pom';
+import { jest } from '@jest/globals';
+import { parsePom } from './pom.js';
 
 // Mock pom-parser since it's an external dependency that might read files or behave complexly
 jest.mock('pom-parser', () => ({
-    parse: jest.fn((opts, cb) => {
+    parse: jest.fn((opts: any, cb: any) => {
         if (opts.xmlContent === '<invalid>') {
             cb(new Error('Invalid XML'), null);
         } else {

@@ -1,4 +1,4 @@
-import { BUILD_TYPE } from "../types/build-type";
+import { BUILD_TYPE } from "../types/build-type.js";
 import * as core from "@actions/core";
 
 export function validateBumpCommand(buildType: BUILD_TYPE, bumpCommand: string): void {

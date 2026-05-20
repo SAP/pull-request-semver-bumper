@@ -1,5 +1,5 @@
-import { validateBumpCommand } from './validate-bump-command';
-import { BUILD_TYPE } from '../types/build-type';
+import { validateBumpCommand } from './validate-bump-command.js';
+import { BUILD_TYPE } from '../types/build-type.js';
 
 describe('validateBumpCommand', () => {
     it('should throw if command is empty', () => {

@@ -1,13 +1,13 @@
 import * as core from '@actions/core';
-import { createGit, configureGit } from './git/git';
-import { BUILD_TYPE } from './types/build-type';
-import { determineVersionLevelFromPRTitle } from './utils/parse-commit';
-import { bumpVersion } from './version/bump-version';
-import { updateLocalVersion } from './version/update-version';
-import { fetchCurrentVersion } from './version/fetch-version';
-import { validateBumpCommand } from "./version/validate-bump-command";
+import { createGit, configureGit } from './git/git.js';
+import { BUILD_TYPE } from './types/build-type.js';
+import { determineVersionLevelFromPRTitle } from './utils/parse-commit.js';
+import { bumpVersion } from './version/bump-version.js';
+import { updateLocalVersion } from './version/update-version.js';
+import { fetchCurrentVersion } from './version/fetch-version.js';
+import { validateBumpCommand } from "./version/validate-bump-command.js";
 import fs from "fs";
-import {executeCommand} from "./utils/executeCommand";
+import {executeCommand} from "./utils/executeCommand.js";
 
 async function run(): Promise<void> {
     try {

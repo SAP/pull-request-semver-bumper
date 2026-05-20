@@ -1,7 +1,8 @@
-import { fetchCurrentVersion } from './fetch-version';
-import { BUILD_TYPE } from '../types/build-type';
-import { getFileFromDefaultBranch } from '../git/git';
-import { parsePom } from '../utils/pom';
+import { jest } from '@jest/globals';
+import { fetchCurrentVersion } from './fetch-version.js';
+import { BUILD_TYPE } from '../types/build-type.js';
+import { getFileFromDefaultBranch } from '../git/git.js';
+import { parsePom } from '../utils/pom.js';
 
 // Mock dependencies
 jest.mock('../git/git');

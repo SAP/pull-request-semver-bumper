@@ -1,4 +1,4 @@
-import { determineVersionLevelFromPRTitle } from './parse-commit';
+import { determineVersionLevelFromPRTitle } from './parse-commit.js';
 
 describe('determineVersionLevelFromPRTitle', () => {
     it('should return minor for feat', () => {

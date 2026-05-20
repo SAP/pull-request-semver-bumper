@@ -1,4 +1,5 @@
-import { createGit, configureGit, getFileFromDefaultBranch } from './git';
+import { jest } from '@jest/globals';
+import { createGit, configureGit, getFileFromDefaultBranch } from './git.js';
 import { simpleGit } from 'simple-git';
 
 jest.mock('simple-git');

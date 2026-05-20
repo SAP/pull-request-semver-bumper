@@ -1,8 +1,8 @@
 import { SimpleGit } from 'simple-git';
-import { BUILD_TYPE } from '../types/build-type';
-import { getFileFromDefaultBranch } from '../git/git';
-import { parsePom } from '../utils/pom';
-import { fetchPomPath } from '../utils/file';
+import { BUILD_TYPE } from '../types/build-type.js';
+import { getFileFromDefaultBranch } from '../git/git.js';
+import { parsePom } from '../utils/pom.js';
+import { fetchPomPath } from '../utils/file.js';
 
 export async function fetchCurrentVersion(
     git: SimpleGit,
