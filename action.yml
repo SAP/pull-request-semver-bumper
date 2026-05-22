@@ -12,7 +12,7 @@ inputs:
     description: "GitHub token with permission to fetch PR status and commit changes"
     required: true
   dry-run:
-    description: "If true, skip git push"
+    description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
   bump-command:

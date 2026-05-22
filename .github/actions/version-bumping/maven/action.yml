@@ -34,7 +34,7 @@ inputs:
     description: "Github token with permission to fetch PR status and commit the changes"
     required: true
   dry-run:
-    description: "If true, skip git push"
+    description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
 

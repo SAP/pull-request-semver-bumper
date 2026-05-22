@@ -50,7 +50,7 @@ inputs:
     description: "Github token"
     required: true
   dry-run:
-    description: "If true, skip git push"
+    description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
 outputs:
