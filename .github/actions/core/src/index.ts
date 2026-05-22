@@ -17,6 +17,7 @@ async function run(): Promise<void> {
         const postCommand = core.getInput('post-command').trim() || '';
 
         const buildType = core.getInput('build-type') as BUILD_TYPE;
+        const dryRun = core.getInput('dry-run') === 'true';
         const files = {
             pom: core.getInput('pom-file') || 'pom.xml',
             pkg: core.getInput('package-json-file') || 'package.json',
@@ -36,7 +37,8 @@ async function run(): Promise<void> {
             git,
             core.getInput('token'),
             core.getInput('git-username'),
-            core.getInput('git-useremail')
+            core.getInput('git-useremail'),
+            dryRun
         );
 
         const prTitle = event.pull_request?.title;
@@ -77,7 +79,6 @@ async function run(): Promise<void> {
             );
             await git.commit(commitMessage);
 
-            const dryRun = core.getInput('dry-run') === 'true';
             if (dryRun) {
                 core.info(`[DRY-RUN] Would push changes to origin/${core.getInput('pr-branch')}`);
             } else {

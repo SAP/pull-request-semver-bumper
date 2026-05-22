@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { createGit, configureGit, getFileFromDefaultBranch } from './git.js';
 import { simpleGit } from 'simple-git';
+import * as core from '@actions/core';
 
 jest.mock('simple-git');
 jest.mock('@actions/core');
@@ -40,6 +41,16 @@ describe('git', () => {
         await configureGit(mockSimpleGit as any, 'token', 'user', 'email');
         expect(mockSimpleGit.addConfig).toHaveBeenCalledWith('user.name', 'user');
         expect(mockSimpleGit.addConfig).toHaveBeenCalledWith('user.email', 'email');
+        expect(mockSimpleGit.checkout).toHaveBeenCalledWith('feature/branch');
+        expect(mockSimpleGit.pull).toHaveBeenCalled();
+    });
+
+    it('should skip branch checkout and pull for dry runs', async () => {
+        await configureGit(mockSimpleGit as any, 'token', 'user', 'email', true);
+        expect(mockSimpleGit.fetch).toHaveBeenCalledWith(['--all']);
+        expect(mockSimpleGit.checkout).not.toHaveBeenCalled();
+        expect(mockSimpleGit.pull).not.toHaveBeenCalled();
+        expect(core.info).toHaveBeenCalledWith('[DRY-RUN] Skipping PR branch checkout and pull.');
     });
 
     it('should get file from default branch', async () => {
