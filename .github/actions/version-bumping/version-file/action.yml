@@ -12,7 +12,7 @@ inputs:
     required: false
   commit-message:
     description: "Custom commit message for version bump commit"
-    default: "version bump to"
+    default: "chore: bump version to @NEW_VERSION@"
     required: false
   git-username:
     description: "Git username for the commit"

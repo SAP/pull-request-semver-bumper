@@ -1,7 +1,12 @@
 export function formatVersionBumpCommitMessage(
-    commitMessagePrefix: string,
+    commitMessage: string,
     newVersion: string
 ): string {
-    const prefix = commitMessagePrefix.trim() || 'chore: bump version to';
-    return `${prefix} ${newVersion}`;
+    const message = commitMessage.trim();
+
+    if (!message) {
+        return `chore: bump version to ${newVersion}`;
+    }
+
+    return message.split('@NEW_VERSION@').join(newVersion);
 }

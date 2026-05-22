@@ -21,7 +21,7 @@ It reads the current version from `pyproject.toml`, calculates the next version 
 | `post-command` | String | No | `''` | Shell command to run after bumping (e.g., `poetry lock --no-update`). |
 | `git-username` | String | No | `github-actions[bot]` | Git author name. |
 | `git-useremail` | String | No | `github-actions[bot]@users.noreply.github.com` | Git author email. |
-| `commit-message` | String | No | `version bump to` | Commit message prefix. |
+| `commit-message` | String | No | `chore: bump version to @NEW_VERSION@` | Commit message. Use `@NEW_VERSION@` to insert the bumped version. |
 | `dry-run` | String | No | `false` | If true, skip git push. |
 
 ### Supported Bump Commands
