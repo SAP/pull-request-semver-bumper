@@ -55282,7 +55282,14 @@ function validateExecutable(cmd, allowed, buildType) {
     throw new Error(`Invalid bump-command executable for ${buildType}: "${cmd}". Allowed executables: ${allowed.join(", ")}`);
 }
 
+;// CONCATENATED MODULE: ./build/utils/commit-message.js
+function formatVersionBumpCommitMessage(commitMessagePrefix, newVersion) {
+    const prefix = commitMessagePrefix.trim() || 'chore: bump version to';
+    return `${prefix} ${newVersion}`;
+}
+
 ;// CONCATENATED MODULE: ./build/index.js
+
 
 
 
@@ -55331,7 +55338,8 @@ async function run() {
         info("result:" + JSON.stringify(status));
         if (status.modified.length > 0) {
             await git.add('.');
-            await git.commit(`chore: bump version to ${newVersion}`);
+            const commitMessage = formatVersionBumpCommitMessage(getInput('commit-message'), newVersion);
+            await git.commit(commitMessage);
             const dryRun = getInput('dry-run') === 'true';
             if (dryRun) {
                 info(`[DRY-RUN] Would push changes to origin/${getInput('pr-branch')}`);

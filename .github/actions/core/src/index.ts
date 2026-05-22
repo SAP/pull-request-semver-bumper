@@ -6,6 +6,7 @@ import { bumpVersion } from './version/bump-version.js';
 import { updateLocalVersion } from './version/update-version.js';
 import { fetchCurrentVersion } from './version/fetch-version.js';
 import { validateBumpCommand } from "./version/validate-bump-command.js";
+import { formatVersionBumpCommitMessage } from './utils/commit-message.js';
 import fs from "fs";
 import {executeCommand} from "./utils/executeCommand.js";
 
@@ -70,7 +71,11 @@ async function run(): Promise<void> {
 
         if (status.modified.length > 0 ) {
             await git.add('.');
-            await git.commit(`chore: bump version to ${newVersion}`);
+            const commitMessage = formatVersionBumpCommitMessage(
+                core.getInput('commit-message'),
+                newVersion
+            );
+            await git.commit(commitMessage);
 
             const dryRun = core.getInput('dry-run') === 'true';
             if (dryRun) {
