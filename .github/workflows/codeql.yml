@@ -6,21 +6,27 @@
 #
 # Triggers:
 #   - push to main                  (baseline analysis of merged code)
-#   - pull_request_target on main   (PR head analysis, including fork PRs)
+#   - pull_request on main          (PRs from branches within this repo)
+#   - pull_request_target on main   (PRs from forks)
 #   - weekly schedule               (catches new queries / advisories)
 #
-# Security model for fork PRs:
-#   - pull_request_target runs in the BASE repo context using the workflow
-#     file from main; the fork cannot modify what runs here.
-#   - We explicitly check out the PR head with persist-credentials: false so
-#     the base-repo token is never exposed to fork code.
+# The job-level `if` ensures each PR is analyzed exactly once:
+#   - same-repo PRs      → pull_request only
+#   - fork PRs           → pull_request_target only
+#
+# Security model for fork PRs (pull_request_target):
+#   - Workflow file is read from main; the fork cannot modify what runs.
+#   - actions/checkout uses persist-credentials: false so the base-repo
+#     token is never exposed to fork code.
 #   - build-mode: none for both languages — CodeQL extracts directly from
-#     source. No `npm install`, no `run:` step executes fork code.
+#     source, no `npm install`, no `run:` step executes fork code.
 
 name: "CodeQL Advanced"
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   pull_request_target:
     branches: [main]
@@ -35,6 +41,16 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
+    # Run on push and schedule unconditionally.
+    # On pull_request:        only same-repo PRs (forks handled by pull_request_target).
+    # On pull_request_target: only fork PRs    (same-repo handled by pull_request).
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
 
     strategy:
@@ -50,11 +66,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # On pull_request_target, check out the PR head (incl. forks).
+          # On any pull_request[_target], check out the PR head (incl. forks).
           # On push/schedule, fall back to the workflow ref.
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          # Do NOT expose the base-repo token to fork code.
+          # Do NOT expose the base-repo token to checked-out code.
           persist-credentials: false
 
       - name: Initialize CodeQL
