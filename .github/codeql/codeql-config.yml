@@ -1,0 +1,26 @@
+name: "SAP/pull-request-semver-bumper CodeQL config"
+
+# Apply these path filters to every language analyzed.
+paths-ignore:
+  # Generated bundles produced by ncc/webpack — analyzing them duplicates
+  # alerts already covered by the TS sources and produces noise.
+  - "**/dist/**"
+
+  # Vendored dependencies.
+  - "**/node_modules/**"
+
+  # Build artefacts and TypeScript output directories, if any.
+  - "**/build/**"
+  - "**/out/**"
+  - "**/coverage/**"
+
+  # Test fixtures and snapshots — usually not interesting for security scans
+  # and frequently contain intentionally malformed inputs that trip rules.
+  - "**/__fixtures__/**"
+  - "**/__snapshots__/**"
+  - "**/*.snap"
+
+  # Lockfiles and generated package manifests.
+  - "**/package-lock.json"
+  - "**/yarn.lock"
+  - "**/pnpm-lock.yaml"
