@@ -20,6 +20,10 @@
 #     token is never exposed to fork code.
 #   - build-mode: none for both languages — CodeQL extracts directly from
 #     source, no `npm install`, no `run:` step executes fork code.
+#   - The CodeQL configuration (paths-ignore, queries) is provided INLINE
+#     via the `config:` input rather than read from a file in the working
+#     directory. This prevents a malicious fork from disabling queries or
+#     adding broad paths-ignore in their PR to neuter the security gate.
 
 name: "CodeQL Advanced"
 
@@ -78,10 +82,30 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          config-file: ./.github/codeql/codeql-config.yml
           # Use the security-and-quality suite to also report quality alerts,
           # which the repo ruleset's `code_quality` rule consumes.
           queries: security-and-quality
+          # Inline config (NOT config-file) so the fork's working-directory
+          # version cannot override paths-ignore or disable queries.
+          config: |
+            paths-ignore:
+              # Generated bundles produced by ncc/webpack — analyzing them
+              # duplicates alerts already covered by the TS sources.
+              - "**/dist/**"
+              # Vendored dependencies.
+              - "**/node_modules/**"
+              # Build artefacts and TypeScript output directories.
+              - "**/build/**"
+              - "**/out/**"
+              - "**/coverage/**"
+              # Test fixtures and snapshots.
+              - "**/__fixtures__/**"
+              - "**/__snapshots__/**"
+              - "**/*.snap"
+              # Lockfiles.
+              - "**/package-lock.json"
+              - "**/yarn.lock"
+              - "**/pnpm-lock.yaml"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
