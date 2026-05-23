@@ -231,7 +231,8 @@ jobs:
           fi
 
       - name: Set Commit Status
-        uses: myrotvorets/set-commit-status-action@master
+        # Pinned to v2.0.1 SHA — third-party action, must not float on a tag.
+        uses: myrotvorets/set-commit-status-action@3730c0a348a2ace3c110851bed53331bc6406e9f # v2.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: ${{ steps.status.outputs.status }}
