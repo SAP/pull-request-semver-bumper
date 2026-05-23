@@ -36,7 +36,7 @@ inputs:
     required: true
   commit-message:
     description: "Custom commit message for version bump commit"
-    default: "version bump to"
+    default: "chore: bump version to @NEW_VERSION@"
     required: false
   version-property-path:
     description: "Custom path of version property to update version. Only relevant for buildType maven "
@@ -50,7 +50,7 @@ inputs:
     description: "Github token"
     required: true
   dry-run:
-    description: "If true, skip git push"
+    description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
 outputs:

@@ -54650,7 +54650,7 @@ var esm_default = (/* unused pure expression or super */ null && (gitInstanceFac
 
 
 
-async function configureGit(git, token, gitUsername, gitUserEmail) {
+async function configureGit(git, token, gitUsername, gitUserEmail, dryRun = false) {
     // -------------------------------
     // Restore original logic:
     // If NOT inside a repo, clone it
@@ -54680,8 +54680,13 @@ async function configureGit(git, token, gitUsername, gitUserEmail) {
         await git.addRemote('origin', remoteUrl);
     }
     await git.fetch(['--all']);
-    await git.checkout(prBranch);
-    await git.pull();
+    if (dryRun) {
+        info('[DRY-RUN] Skipping PR branch checkout and pull.');
+    }
+    else {
+        await git.checkout(prBranch);
+        await git.pull();
+    }
     await git.addConfig('user.email', gitUserEmail);
     await git.addConfig('user.name', gitUsername);
 }
@@ -55282,7 +55287,17 @@ function validateExecutable(cmd, allowed, buildType) {
     throw new Error(`Invalid bump-command executable for ${buildType}: "${cmd}". Allowed executables: ${allowed.join(", ")}`);
 }
 
+;// CONCATENATED MODULE: ./build/utils/commit-message.js
+function formatVersionBumpCommitMessage(commitMessage, newVersion) {
+    const message = commitMessage.trim();
+    if (!message) {
+        return `chore: bump version to ${newVersion}`;
+    }
+    return message.split('@NEW_VERSION@').join(newVersion);
+}
+
 ;// CONCATENATED MODULE: ./build/index.js
+
 
 
 
@@ -55298,6 +55313,7 @@ async function run() {
         let command = getInput('bump-command').trim() || '';
         const postCommand = getInput('post-command').trim() || '';
         const buildType = getInput('build-type');
+        const dryRun = getInput('dry-run') === 'true';
         const files = {
             pom: getInput('pom-file') || 'pom.xml',
             pkg: getInput('package-json-file') || 'package.json',
@@ -55310,7 +55326,7 @@ async function run() {
         }
         const event = JSON.parse(external_fs_.readFileSync(eventPath, 'utf8'));
         validateBumpCommand(buildType, command);
-        await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'));
+        await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'), dryRun);
         const prTitle = event.pull_request?.title;
         if (!prTitle) {
             throw new Error('Pull request title not found in event payload.');
@@ -55331,8 +55347,8 @@ async function run() {
         info("result:" + JSON.stringify(status));
         if (status.modified.length > 0) {
             await git.add('.');
-            await git.commit(`chore: bump version to ${newVersion}`);
-            const dryRun = getInput('dry-run') === 'true';
+            const commitMessage = formatVersionBumpCommitMessage(getInput('commit-message'), newVersion);
+            await git.commit(commitMessage);
             if (dryRun) {
                 info(`[DRY-RUN] Would push changes to origin/${getInput('pr-branch')}`);
             }
