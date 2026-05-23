@@ -6,7 +6,8 @@ export async function configureGit(
     git: SimpleGit,
     token: string,
     gitUsername: string,
-    gitUserEmail: string
+    gitUserEmail: string,
+    dryRun = false
 ): Promise<void> {
 
     // -------------------------------
@@ -45,8 +46,12 @@ export async function configureGit(
     }
 
     await git.fetch(['--all']);
-    await git.checkout(prBranch);
-    await git.pull();
+    if (dryRun) {
+        core.info('[DRY-RUN] Skipping PR branch checkout and pull.');
+    } else {
+        await git.checkout(prBranch);
+        await git.pull();
+    }
     await git.addConfig('user.email', gitUserEmail);
     await git.addConfig('user.name', gitUsername);
 
