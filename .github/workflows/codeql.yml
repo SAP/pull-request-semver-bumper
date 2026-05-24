@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # On any pull_request[_target], check out the PR head (incl. forks).
           # On push/schedule, fall back to the workflow ref.
