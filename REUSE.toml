@@ -22,3 +22,18 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+    ".opencode/**",
+    "openspec/**"
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ".opencode/node_modules/**"
+precedence = "override"
+SPDX-FileCopyrightText = "their respective authors"
+SPDX-License-Identifier = "Apache-2.0"

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 SAP SE or an SAP affiliate company and pull-request-semver-bumper contributors
+# SPDX-License-Identifier: Apache-2.0
+
+name: REUSE Compliance
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  reuse-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v5
