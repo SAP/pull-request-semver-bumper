@@ -51,7 +51,7 @@ jobs:
       - name: Commit build artifacts (same-repo PRs only)
         if: github.event.pull_request.head.repo.full_name == github.repository
         id: commit_dist
-        uses: EndBug/add-and-commit@v10
+        uses: EndBug/add-and-commit@290ea2c423ad77ca9c62ae0f5b224379612c0321 # v10.0.0
         with:
           add: "."
           message: "chore: build core action dist (auto)"
@@ -216,7 +216,7 @@ jobs:
           fi
 
       - name: Set Commit Status
-        uses: myrotvorets/set-commit-status-action@master
+        uses: myrotvorets/set-commit-status-action@2c3557527522d8d38f410941902b64a4be75a0ec # master
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: ${{ steps.status.outputs.status }}

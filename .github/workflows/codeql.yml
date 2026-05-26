@@ -27,7 +27,7 @@
 
 name: "CodeQL Advanced"
 
-on:
+on:  # zizmor: ignore[pull-request-target]
   push:
     branches: [main]
   pull_request:
