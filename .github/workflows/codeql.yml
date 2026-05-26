@@ -1,0 +1,113 @@
+# CodeQL Advanced setup for SAP/pull-request-semver-bumper
+#
+# Scans:
+#   - GitHub Actions workflows and action definitions  (language: actions)
+#   - TypeScript / JavaScript sources                  (language: javascript-typescript)
+#
+# Triggers:
+#   - push to main                  (baseline analysis of merged code)
+#   - pull_request on main          (PRs from branches within this repo)
+#   - pull_request_target on main   (PRs from forks)
+#   - weekly schedule               (catches new queries / advisories)
+#
+# The job-level `if` ensures each PR is analyzed exactly once:
+#   - same-repo PRs      → pull_request only
+#   - fork PRs           → pull_request_target only
+#
+# Security model for fork PRs (pull_request_target):
+#   - Workflow file is read from main; the fork cannot modify what runs.
+#   - actions/checkout uses persist-credentials: false so the base-repo
+#     token is never exposed to fork code.
+#   - build-mode: none for both languages — CodeQL extracts directly from
+#     source, no `npm install`, no `run:` step executes fork code.
+#   - The CodeQL configuration (paths-ignore, queries) is provided INLINE
+#     via the `config:` input rather than read from a file in the working
+#     directory. This prevents a malicious fork from disabling queries or
+#     adding broad paths-ignore in their PR to neuter the security gate.
+
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+  schedule:
+    - cron: '26 1 * * 3'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Run on push and schedule unconditionally.
+    # On pull_request:        only same-repo PRs (forks handled by pull_request_target).
+    # On pull_request_target: only fork PRs    (same-repo handled by pull_request).
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # On any pull_request[_target], check out the PR head (incl. forks).
+          # On push/schedule, fall back to the workflow ref.
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          # Do NOT expose the base-repo token to checked-out code.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # Use the security-and-quality suite to also report quality alerts,
+          # which the repo ruleset's `code_quality` rule consumes.
+          queries: security-and-quality
+          # Inline config (NOT config-file) so the fork's working-directory
+          # version cannot override paths-ignore or disable queries.
+          config: |
+            paths-ignore:
+              # Generated bundles produced by ncc/webpack — analyzing them
+              # duplicates alerts already covered by the TS sources.
+              - "**/dist/**"
+              # Vendored dependencies.
+              - "**/node_modules/**"
+              # Build artefacts and TypeScript output directories.
+              - "**/build/**"
+              - "**/out/**"
+              - "**/coverage/**"
+              # Test fixtures and snapshots.
+              - "**/__fixtures__/**"
+              - "**/__snapshots__/**"
+              - "**/*.snap"
+              # Lockfiles.
+              - "**/package-lock.json"
+              - "**/yarn.lock"
+              - "**/pnpm-lock.yaml"
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

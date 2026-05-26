@@ -50,9 +50,9 @@ with:
 | :--- | :--- | :--- | :--- |
 | `type` | **Required**. Project type to bump (`maven`, `npm`, `python`, `version-file`). | | Yes |
 | `token` | **Required**. GitHub token. | | Yes |
-| `dry-run` | If true, skip git push. | `false` | No |
+| `dry-run` | If true, skip git checkout, pull, and push. | `false` | No |
 | `bump-command` | Custom command to update version. | (auto) | No |
-| `commit-message` | Custom commit message. | `version bump to` | No |
+| `commit-message` | Custom commit message. Use `@NEW_VERSION@` to insert the bumped version. | `chore: bump version to @NEW_VERSION@` | No |
 | `package-json-file` | Path to package.json (npm only). | `package.json` | No |
 | `pom-file` | Path to pom.xml (maven only). | `pom.xml` | No |
 | `pyproject-file` | Path to pyproject.toml (python only). | `pyproject.toml` | No |

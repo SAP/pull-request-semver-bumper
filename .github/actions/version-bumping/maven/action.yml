@@ -12,7 +12,7 @@ inputs:
     required: false
   commit-message:
     description: "Custom commit message for version bump commit"
-    default: "version bump to"
+    default: "chore: bump version to @NEW_VERSION@"
     required: false
   version-property-path:
     description: "Version property to update"
@@ -34,7 +34,7 @@ inputs:
     description: "Github token with permission to fetch PR status and commit the changes"
     required: true
   dry-run:
-    description: "If true, skip git push"
+    description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
 

@@ -21,8 +21,8 @@ It reads the version from a specified file (default `VERSION`), calculates the n
 | `post-command` | String | No | `''` | Shell command to run after bumping. |
 | `git-username` | String | No | `github-actions[bot]` | Git author name. |
 | `git-useremail` | String | No | `github-actions[bot]@users.noreply.github.com` | Git author email. |
-| `commit-message` | String | No | `version bump to` | Commit message prefix. |
-| `dry-run` | String | No | `false` | If true, skip git push. |
+| `commit-message` | String | No | `chore: bump version to @NEW_VERSION@` | Commit message. Use `@NEW_VERSION@` to insert the bumped version. |
+| `dry-run` | String | No | `false` | If true, skip git checkout, pull, and push. |
 
 ### Supported Bump Commands
 This action is **permissive**. It does not restrict the executable, allowing you to use any shell command available in the runner environment (e.g., `echo`, `printf`, custom scripts).
