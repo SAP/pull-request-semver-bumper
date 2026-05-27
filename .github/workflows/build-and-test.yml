@@ -29,8 +29,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          # For same-repo PRs: branch ref so subsequent steps see the branch tip.
+          # For fork PRs: refs/pull/N/head — GitHub maintains this in the base repo,
+          # so no cross-repo clone is needed and CodeQL does not flag it as an
+          # "untrusted checkout in privileged context".
+          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
           # persist-credentials: false so the read-only token is not stored in
           # the git credential helper and is unavailable to npm scripts.
           persist-credentials: false
@@ -77,8 +80,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          # For same-repo PRs: branch ref so EndBug/add-and-commit can push.
+          # For fork PRs: refs/pull/N/head — base-repo ref, no cross-repo clone.
+          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download dist artifact
