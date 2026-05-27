@@ -27,6 +27,7 @@ jobs:
       contents: read
     outputs:
       artifact-id: ${{ steps.upload-dist.outputs.artifact-id }}
+      dist-dirty: ${{ steps.check-dirty.outputs.dirty }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v6
@@ -59,10 +60,12 @@ jobs:
         run: npm run build
 
       - name: Fail if dist is dirty (fork PRs only)
+        id: check-dirty
         if: github.event.pull_request.head.repo.full_name != github.repository
         working-directory: .github/actions/core
         run: |
           if [[ -n $(git status --porcelain dist) ]]; then
+            echo "dirty=true" >> "$GITHUB_OUTPUT"
             echo "::error::The 'dist' folder is out of sync with the source code."
             echo "::error::Because this is a forked PR, we cannot automatically commit the changes."
             echo "::error::Please run 'npm run build' in '.github/actions/core' locally and commit the changes."
@@ -77,6 +80,42 @@ jobs:
           name: dist-artifact
           path: .github/actions/core/dist/
           retention-days: 1 # commit-dist deletes it immediately; this is a safety net
+
+  # Posts a PR comment when the dist check fails on fork PRs.
+  # Isolated into its own job so pull-requests:write is never held by the job
+  # that executes untrusted fork code.
+  comment-dist-dirty:
+    needs: build-test-core
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'failure' &&
+      needs.build-test-core.outputs.dist-dirty == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post dist-out-of-sync comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/comment.md << 'EOF'
+          > [!WARNING]
+          > The `dist` folder is out of sync with the source code.
+          >
+          > Because this is a forked PR, the workflow cannot automatically commit the updated build artifacts.
+          > Please run the following commands locally and push the result:
+          >
+          > ```bash
+          > cd .github/actions/core
+          > npm run build
+          > git add dist/
+          > git commit -m "chore: build core action dist"
+          > git push
+          > ```
+          EOF
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/comment.md
 
   # Commits the pre-built dist artifact back to the PR branch.
   # Only runs for same-repo PRs — fork PR validation is handled entirely in
