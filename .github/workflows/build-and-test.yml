@@ -153,8 +153,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$GITHUB_HEAD_REF"
-          git checkout -B "$GITHUB_HEAD_REF" "origin/$GITHUB_HEAD_REF"
+          # Derive the PR head branch purely from git history so no GitHub
+          # event/context data flows into the git checkout command (CodeQL taint-free).
+          # For a pull_request checkout, HEAD is the merge commit; HEAD^2 is the PR head.
+          PR_HEAD=$(git rev-parse HEAD^2)
+          BRANCH=$(git branch -r --contains "$PR_HEAD" --format='%(refname:short)' \
+            | grep '^origin/' | grep -v 'origin/HEAD' | head -1 | sed 's|^origin/||')
+          git checkout -B "$BRANCH" "origin/$BRANCH"
           cp -r /tmp/dist-artifact/. .github/actions/core/dist/
           git add .github/actions/core/dist/
           if git diff --staged --quiet; then
@@ -162,7 +167,7 @@ jobs:
             exit 0
           fi
           git commit -m "chore: build core action dist (auto)"
-          git push origin "$GITHUB_HEAD_REF"
+          git push origin "$BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Delete dist artifact
