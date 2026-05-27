@@ -17,7 +17,10 @@ concurrency:
 permissions: {}
 
 jobs:
-  # Runs fork/PR code with read-only token.  No write access here.
+  # Runs fork/PR code with read-only token. No write access here.
+  # For fork PRs: also validates that dist is in sync (fails if not).
+  # For same-repo PRs: uploads the compiled dist as a short-lived artifact
+  #   for commit-dist to consume.
   build-test-core:
     runs-on: ubuntu-latest
     permissions:
@@ -29,10 +32,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # For same-repo PRs: branch ref so subsequent steps see the branch tip.
-          # For fork PRs: refs/pull/N/head — GitHub maintains this in the base repo,
-          # so no cross-repo clone is needed and CodeQL does not flag it as an
-          # "untrusted checkout in privileged context".
+          # For same-repo PRs: branch ref so git status compares against the branch tip.
+          # For fork PRs: refs/pull/N/head — GitHub maintains this ref in the base repo,
+          # so no cross-repo clone is required and the CodeQL unsafe-checkout rule is satisfied.
           ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
           # persist-credentials: false so the read-only token is not stored in
           # the git credential helper and is unavailable to npm scripts.
@@ -56,52 +58,7 @@ jobs:
         working-directory: .github/actions/core
         run: npm run build
 
-      - name: Upload dist artifact
-        id: upload-dist
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-artifact
-          path: .github/actions/core/dist/
-          retention-days: 1 # commit-dist deletes it immediately; this is a safety net
-
-  # Commits the pre-built dist back to the PR branch.
-  # No fork code runs here — only the artifact from build-test-core.
-  commit-dist:
-    needs: build-test-core
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      actions: write # needed to delete the dist artifact after use
-    outputs:
-      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
-    steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          # For same-repo PRs: branch ref so EndBug/add-and-commit can push.
-          # For fork PRs: refs/pull/N/head — base-repo ref, no cross-repo clone.
-          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-artifact
-          path: .github/actions/core/dist/
-
-      - name: Commit build artifacts (same-repo PRs only)
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        id: commit_dist
-        uses: EndBug/add-and-commit@v10
-        with:
-          add: "."
-          message: "chore: build core action dist (auto)"
-          default_author: github_actions
-          push: true
-
-      - name: Fail if dist is dirty (forked PRs only)
+      - name: Fail if dist is dirty (fork PRs only)
         if: github.event.pull_request.head.repo.full_name != github.repository
         working-directory: .github/actions/core
         run: |
@@ -112,6 +69,54 @@ jobs:
             exit 1
           fi
 
+      - name: Upload dist artifact (same-repo PRs only)
+        id: upload-dist
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifact
+          path: .github/actions/core/dist/
+          retention-days: 1 # commit-dist deletes it immediately; this is a safety net
+
+  # Commits the pre-built dist artifact back to the PR branch.
+  # Only runs for same-repo PRs — fork PR validation is handled entirely in
+  # build-test-core, so this job never touches fork data.
+  # The checkout is of a branch that lives in THIS repository (not a fork),
+  # so it does not trigger the CodeQL "unsafe checkout in privileged context" rule.
+  commit-dist:
+    needs: build-test-core
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # needed to delete the dist artifact after use
+    outputs:
+      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # head.ref is a branch in THIS repository — not a fork checkout.
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifact
+          path: .github/actions/core/dist/
+
+      - name: Commit build artifacts
+        id: commit_dist
+        uses: EndBug/add-and-commit@v10
+        with:
+          add: "."
+          message: "chore: build core action dist (auto)"
+          default_author: github_actions
+          push: true
+
       - name: Delete dist artifact
         if: always()
         env:
@@ -121,7 +126,12 @@ jobs:
             "/repos/${{ github.repository }}/actions/artifacts/${{ needs.build-test-core.outputs.artifact-id }}"
 
   test-python:
-    needs: commit-dist
+    needs: [build-test-core, commit-dist]
+    # commit-dist is skipped for fork PRs; treat 'skipped' as OK so fork PR tests still run.
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
       contents: read
@@ -155,7 +165,11 @@ jobs:
           fi
 
   test-npm:
-    needs: commit-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
       contents: read
@@ -189,7 +203,11 @@ jobs:
           fi
 
   test-maven:
-    needs: commit-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
       contents: read
@@ -225,7 +243,11 @@ jobs:
           fi
 
   test-version-file:
-    needs: commit-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
       contents: read
@@ -260,7 +282,7 @@ jobs:
 
   all-tests-passed:
     if: always()
-    needs: [commit-dist, test-python, test-npm, test-maven, test-version-file]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
