@@ -13,14 +13,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# No workflow-level permissions — each job declares exactly what it needs.
+permissions: {}
+
 jobs:
-  build-dist:
-    runs-on: [ubuntu-latest]
+  # Runs fork/PR code with read-only token.  No write access here.
+  build-test-core:
+    runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     outputs:
-      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
+      artifact-id: ${{ steps.upload-dist.outputs.artifact-id }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v6
@@ -28,7 +31,9 @@ jobs:
           fetch-depth: 0
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN}}
+          # persist-credentials: false so the read-only token is not stored in
+          # the git credential helper and is unavailable to npm scripts.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -48,6 +53,40 @@ jobs:
         working-directory: .github/actions/core
         run: npm run build
 
+      - name: Upload dist artifact
+        id: upload-dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifact
+          path: .github/actions/core/dist/
+          retention-days: 1 # commit-dist deletes it immediately; this is a safety net
+
+  # Commits the pre-built dist back to the PR branch.
+  # No fork code runs here — only the artifact from build-test-core.
+  commit-dist:
+    needs: build-test-core
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # needed to delete the dist artifact after use
+    outputs:
+      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifact
+          path: .github/actions/core/dist/
+
       - name: Commit build artifacts (same-repo PRs only)
         if: github.event.pull_request.head.repo.full_name == github.repository
         id: commit_dist
@@ -58,7 +97,7 @@ jobs:
           default_author: github_actions
           push: true
 
-      - name: Fail if dist is dirty (Forked PRs only)
+      - name: Fail if dist is dirty (forked PRs only)
         if: github.event.pull_request.head.repo.full_name != github.repository
         working-directory: .github/actions/core
         run: |
@@ -69,14 +108,24 @@ jobs:
             exit 1
           fi
 
+      - name: Delete dist artifact
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE \
+            "/repos/${{ github.repository }}/actions/artifacts/${{ needs.build-test-core.outputs.artifact-id }}"
+
   test-python:
-    needs: build-dist
+    needs: commit-dist
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -102,13 +151,15 @@ jobs:
           fi
 
   test-npm:
-    needs: build-dist
+    needs: commit-dist
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -134,13 +185,15 @@ jobs:
           fi
 
   test-maven:
-    needs: build-dist
+    needs: commit-dist
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -168,13 +221,15 @@ jobs:
           fi
 
   test-version-file:
-    needs: build-dist
+    needs: commit-dist
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -201,7 +256,7 @@ jobs:
 
   all-tests-passed:
     if: always()
-    needs: [build-dist, test-python, test-npm, test-maven, test-version-file]
+    needs: [commit-dist, test-python, test-npm, test-maven, test-version-file]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
@@ -220,7 +275,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: ${{ steps.status.outputs.status }}
-          sha: ${{ needs.build-dist.outputs.committed_sha || github.event.pull_request.head.sha }}
+          sha: ${{ needs.commit-dist.outputs.committed_sha || github.event.pull_request.head.sha }}
           context: "all-tests-passed"
           description: "Aggregation of all tests"
 
