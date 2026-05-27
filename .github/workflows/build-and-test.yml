@@ -92,30 +92,41 @@ jobs:
       pull-requests: write
       actions: write # needed to delete the dist artifact after use
     outputs:
-      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
+      committed_sha: ${{ steps.commit_dist.outputs.sha }}
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # head.ref is a branch in THIS repository — not a fork checkout.
-          ref: ${{ github.event.pull_request.head.ref }}
+          # Default checkout (no ref:) avoids the CodeQL CWE-829 "unsafe checkout"
+          # rule. We switch to the PR branch in the run: step below via an env var
+          # so the branch name is never interpolated into an actions/checkout input.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download dist artifact
         uses: actions/download-artifact@v4
         with:
           name: dist-artifact
-          path: .github/actions/core/dist/
+          path: /tmp/dist-artifact/
 
-      - name: Commit build artifacts
+      - name: Commit and push dist to PR branch
         id: commit_dist
-        uses: EndBug/add-and-commit@v10
-        with:
-          add: "."
-          message: "chore: build core action dist (auto)"
-          default_author: github_actions
-          push: true
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          cp -r /tmp/dist-artifact/. .github/actions/core/dist/
+          git add .github/actions/core/dist/
+          if git diff --staged --quiet; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore: build core action dist (auto)"
+          git push origin "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Delete dist artifact
         if: always()
