@@ -150,13 +150,11 @@ jobs:
 
       - name: Commit and push dist to PR branch
         id: commit_dist
-        env:
-          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$BRANCH"
-          git checkout -B "$BRANCH" "origin/$BRANCH"
+          git fetch origin "$GITHUB_HEAD_REF"
+          git checkout -B "$GITHUB_HEAD_REF" "origin/$GITHUB_HEAD_REF"
           cp -r /tmp/dist-artifact/. .github/actions/core/dist/
           git add .github/actions/core/dist/
           if git diff --staged --quiet; then
@@ -164,7 +162,7 @@ jobs:
             exit 0
           fi
           git commit -m "chore: build core action dist (auto)"
-          git push origin "$BRANCH"
+          git push origin "$GITHUB_HEAD_REF"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Delete dist artifact
