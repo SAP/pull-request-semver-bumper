@@ -115,6 +115,10 @@ jobs:
           EOF
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
+            --body-file /tmp/comment.md \
+            --edit-last || \
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
             --body-file /tmp/comment.md
 
   # Commits the pre-built dist artifact back to the PR branch.
@@ -159,6 +163,10 @@ jobs:
           PR_HEAD=$(git rev-parse HEAD^2)
           BRANCH=$(git branch -r --contains "$PR_HEAD" --format='%(refname:short)' \
             | grep '^origin/' | grep -v 'origin/HEAD' | head -1 | sed 's|^origin/||')
+          if [[ -z "$BRANCH" ]]; then
+            echo "::error::Could not determine PR branch from git history."
+            exit 1
+          fi
           git checkout -B "$BRANCH" "origin/$BRANCH"
           cp -r /tmp/dist-artifact/. .github/actions/core/dist/
           git add .github/actions/core/dist/
