@@ -8,10 +8,13 @@ SPDX-PackageComment = "The code in this project may include calls to APIs (\"API
 path = [
     ".claude/**",
     ".github/**",
+    ".opencode/**",
+    "openspec/**",
     "action.yml",
     "test-resources/**",
     "README.md",
     "CONTRIBUTING.md",
+    "AGENTS.md",
     ".gitignore",
     ".husky/**",
     "package-lock.json",
