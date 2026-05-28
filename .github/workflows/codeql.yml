@@ -66,6 +66,18 @@ jobs:
           # the PR merge commit by default — no explicit ref or repository needed.
           persist-credentials: false
 
+      - name: Resolve SARIF upload mode
+        run: |
+          # Fork PRs: skip upload — analysis still runs and gates the PR on findings,
+          # but results are not posted to the base repo's Code Scanning dashboard.
+          # All other events (same-repo PR, push, schedule): upload as normal.
+          if [[ "${{ github.event_name }}" == "pull_request" && \
+                "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+            echo "CODEQL_UPLOAD=never" >> "$GITHUB_ENV"
+          else
+            echo "CODEQL_UPLOAD=always" >> "$GITHUB_ENV"
+          fi
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
@@ -100,8 +112,4 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
-          # For fork PRs: skip SARIF upload to Code Scanning — analysis still runs
-          # and the job fails if findings exceed the configured threshold, but results
-          # are not posted to the base repo's security dashboard.
-          # For same-repo PRs, push, and schedule: upload as normal.
-          upload: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'never' || 'always' }}
+          upload: ${{ env.CODEQL_UPLOAD }}

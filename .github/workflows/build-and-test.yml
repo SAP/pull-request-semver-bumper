@@ -29,14 +29,22 @@ jobs:
       artifact-id: ${{ steps.upload-dist.outputs.artifact-id }}
       dist-dirty: ${{ steps.check-dirty.outputs.dirty }}
     steps:
+      - name: Resolve checkout ref
+        run: |
+          if [[ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]]; then
+            # Same-repo PR: use branch ref so git status compares against the branch tip
+            echo "CHECKOUT_REF=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_ENV"
+          else
+            # Fork PR: use refs/pull/N/head — maintained by GitHub in the base repo,
+            # so no cross-repo clone is needed and the CodeQL unsafe-checkout rule is satisfied
+            echo "CHECKOUT_REF=refs/pull/${{ github.event.pull_request.number }}/head" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # For same-repo PRs: branch ref so git status compares against the branch tip.
-          # For fork PRs: refs/pull/N/head — GitHub maintains this ref in the base repo,
-          # so no cross-repo clone is required and the CodeQL unsafe-checkout rule is satisfied.
-          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
+          ref: ${{ env.CHECKOUT_REF }}
           # persist-credentials: false so the read-only token is not stored in
           # the git credential helper and is unavailable to npm scripts.
           persist-credentials: false
