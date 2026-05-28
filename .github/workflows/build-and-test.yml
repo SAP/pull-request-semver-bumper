@@ -30,14 +30,18 @@ jobs:
       dist-dirty: ${{ steps.check-dirty.outputs.dirty }}
     steps:
       - name: Resolve checkout ref
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]]; then
+          if [[ "$HEAD_REPO" == "${{ github.repository }}" ]]; then
             # Same-repo PR: use branch ref so git status compares against the branch tip
-            echo "CHECKOUT_REF=${{ github.event.pull_request.head.ref }}" >> "$GITHUB_ENV"
+            echo "CHECKOUT_REF=$HEAD_REF" >> "$GITHUB_ENV"
           else
             # Fork PR: use refs/pull/N/head — maintained by GitHub in the base repo,
             # so no cross-repo clone is needed and the CodeQL unsafe-checkout rule is satisfied
-            echo "CHECKOUT_REF=refs/pull/${{ github.event.pull_request.number }}/head" >> "$GITHUB_ENV"
+            echo "CHECKOUT_REF=refs/pull/$PR_NUMBER/head" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout PR head

@@ -67,12 +67,14 @@ jobs:
           persist-credentials: false
 
       - name: Resolve SARIF upload mode
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           # Fork PRs: skip upload — analysis still runs and gates the PR on findings,
           # but results are not posted to the base repo's Code Scanning dashboard.
           # All other events (same-repo PR, push, schedule): upload as normal.
           if [[ "${{ github.event_name }}" == "pull_request" && \
-                "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+                "$HEAD_REPO" != "${{ github.repository }}" ]]; then
             echo "CODEQL_UPLOAD=never" >> "$GITHUB_ENV"
           else
             echo "CODEQL_UPLOAD=always" >> "$GITHUB_ENV"
