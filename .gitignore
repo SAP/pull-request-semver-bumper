@@ -3,3 +3,6 @@
 /.github/actions/core/coverage/
 .idea/*
 .vscode/*
+.opencode/
+openspec/
+AGENTS.md
