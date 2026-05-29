@@ -5,24 +5,25 @@
 #   - TypeScript / JavaScript sources                  (language: javascript-typescript)
 #
 # Triggers:
-#   - push to main                  (baseline analysis of merged code)
-#   - pull_request on main          (PRs from branches within this repo)
-#   - pull_request_target on main   (PRs from forks)
-#   - weekly schedule               (catches new queries / advisories)
+#   - push to main          (baseline analysis of merged code)
+#   - pull_request on main  (all PRs: same-repo branches and forks)
+#   - weekly schedule       (catches new queries / advisories)
 #
-# The job-level `if` ensures each PR is analyzed exactly once:
-#   - same-repo PRs      → pull_request only
-#   - fork PRs           → pull_request_target only
+# pull_request_target is intentionally NOT used. The pull_request event
+# fires for fork PRs too, and CodeQL analysis with build-mode: none does
+# not require the privileged base-repo token that pull_request_target
+# provides. For fork PRs, SARIF upload is skipped (upload: never) — the
+# analysis still runs and the job passes/fails on findings, but results
+# are not posted to the Code Scanning dashboard.
 #
-# Security model for fork PRs (pull_request_target):
-#   - Workflow file is read from main; the fork cannot modify what runs.
-#   - actions/checkout uses persist-credentials: false so the base-repo
-#     token is never exposed to fork code.
+# Security model:
+#   - actions/checkout uses persist-credentials: false so no token is
+#     available to subsequent steps.
 #   - build-mode: none for both languages — CodeQL extracts directly from
-#     source, no `npm install`, no `run:` step executes fork code.
+#     source; no `npm install`, no `run:` step executes untrusted code.
 #   - The CodeQL configuration (paths-ignore, queries) is provided INLINE
 #     via the `config:` input rather than read from a file in the working
-#     directory. This prevents a malicious fork from disabling queries or
+#     directory. This prevents a contributor from disabling queries or
 #     adding broad paths-ignore in their PR to neuter the security gate.
 
 name: "CodeQL Advanced"
@@ -32,30 +33,21 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  pull_request_target:
-    branches: [main]
   schedule:
     - cron: '26 1 * * 3'
 
-permissions:
-  contents: read
-  security-events: write
-  pull-requests: read
+# Workflow-level permissions intentionally empty.
+# The analyze job declares only what it needs.
+permissions: {}
 
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    # Run on push and schedule unconditionally.
-    # On pull_request:        only same-repo PRs (forks handled by pull_request_target).
-    # On pull_request_target: only fork PRs    (same-repo handled by pull_request).
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
 
     strategy:
       fail-fast: false
@@ -70,12 +62,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          # On any pull_request[_target], check out the PR head (incl. forks).
-          # On push/schedule, fall back to the workflow ref.
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          # Do NOT expose the base-repo token to checked-out code.
+          # For pull_request events (including forks), actions/checkout checks out
+          # the PR merge commit by default — no explicit ref or repository needed.
           persist-credentials: false
+
+      - name: Resolve SARIF upload mode
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          # Fork PRs: skip upload — analysis still runs and gates the PR on findings,
+          # but results are not posted to the base repo's Code Scanning dashboard.
+          # All other events (same-repo PR, push, schedule): upload as normal.
+          if [[ "${{ github.event_name }}" == "pull_request" && \
+                "$HEAD_REPO" != "${{ github.repository }}" ]]; then
+            echo "CODEQL_UPLOAD=never" >> "$GITHUB_ENV"
+          else
+            echo "CODEQL_UPLOAD=always" >> "$GITHUB_ENV"
+          fi
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -85,7 +88,7 @@ jobs:
           # Use the security-and-quality suite to also report quality alerts,
           # which the repo ruleset's `code_quality` rule consumes.
           queries: security-and-quality
-          # Inline config (NOT config-file) so the fork's working-directory
+          # Inline config (NOT config-file) so a contributor's working-directory
           # version cannot override paths-ignore or disable queries.
           config: |
             paths-ignore:
@@ -111,3 +114,4 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
+          upload: ${{ env.CODEQL_UPLOAD }}
