@@ -1,0 +1,62 @@
+# Paired workflow for build-and-test.yml.
+#
+# When a PR only changes documentation, license metadata, or workflow files
+# unrelated to the action's runtime (CodeQL, Dependabot, Renovate config),
+# build-and-test.yml is skipped via its paths-ignore filter and would never
+# report the `all-tests-passed` commit status that the repository ruleset
+# requires for merge.
+#
+# This workflow runs in the inverse case (`paths:` is the inverse of
+# `paths-ignore:` in build-and-test.yml) and reports `all-tests-passed`
+# = success directly, satisfying the ruleset without invoking the full
+# e2e suite. Both workflows share `name: Build & Test` so the status
+# context name (`all-tests-passed`) is identical.
+#
+# If a PR mixes ignored and non-ignored paths, BOTH workflows run.
+# The skip workflow finishes in seconds while the real workflow takes
+# minutes, so the real run's status is the last write — the genuine
+# result wins.
+
+name: Build & Test
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    # Inverse of build-and-test.yml's paths-ignore. Keep the two lists
+    # identical when adding/removing entries.
+    paths:
+      - '**/*.md'
+      - 'LICENSE'
+      - 'LICENSES/**'
+      - 'REUSE.toml'
+      - 'renovate.json'
+      - '.gitignore'
+      - '.github/workflows/codeql.yml'
+      - '.github/codeql/**'
+      - '.github/dependabot.yml'
+      - '.github/CODEOWNERS'
+
+concurrency:
+  group: ${{ github.workflow }}-skip-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  all-tests-passed:
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark all-tests-passed (no-op for non-runtime changes)
+        # Pinned to v2.0.1 SHA — third-party action, must not float on a tag.
+        uses: myrotvorets/set-commit-status-action@3730c0a348a2ace3c110851bed53331bc6406e9f # v2.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: success
+          sha: ${{ github.event.pull_request.head.sha }}
+          context: "all-tests-passed"
+          description: "Skipped — PR only changes docs/workflow metadata"

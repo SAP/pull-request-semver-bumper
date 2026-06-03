@@ -7,6 +7,21 @@ on:
       - opened
       - synchronize
       - reopened
+    # Documentation- and workflow-only changes do not affect the runtime
+    # behaviour of the composite/JS actions in this repo. For those PRs the
+    # paired skip workflow (build-and-test-skip.yml) reports the required
+    # `all-tests-passed` status without burning ~5 minutes of e2e runtime.
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - 'LICENSES/**'
+      - 'REUSE.toml'
+      - 'renovate.json'
+      - '.gitignore'
+      - '.github/workflows/codeql.yml'
+      - '.github/codeql/**'
+      - '.github/dependabot.yml'
+      - '.github/CODEOWNERS'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
