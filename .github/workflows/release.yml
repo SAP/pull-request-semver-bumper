@@ -9,8 +9,6 @@ on:
 
 permissions:
     contents: write
-    pull-requests: write
-    statuses: write
 
 jobs:
     release:
@@ -30,114 +28,26 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Get Previous Tag
-              id: prev_tag
-              run: |
-                  # Get the most recent tag, or use empty string for first release
-                  PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-                  echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
-                  echo "Previous tag: $PREV_TAG"
-
-            - name: Generate Changelog
-              id: changelog
-              uses: mikepenz/release-changelog-builder-action@348e88fab4c37338b1e803ceb2d4a7a5db6c0833 # v6
-              with:
-                  configuration: "configuration.json"
-                  mode: "COMMIT"
-                  fromTag: ${{ steps.prev_tag.outputs.tag }}
-                  toTag: "HEAD"
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Create Changelog PR and Merge
-              id: changelog_pr
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Tagging
               run: |
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
-                  BRANCH_NAME="chore/changelog-v$VERSION"
-                  git checkout -b "$BRANCH_NAME"
+                  # Tag main directly so the tag is reachable from main.
+                  # This ensures GitHub's release notes range computation works correctly,
+                  # using the previous release tag rather than the repo's initial commit.
+                  git tag "v$VERSION"
+                  git push origin "v$VERSION"
 
-                  # Prepend changelog to CHANGELOG.md (create if not exists)
-                  touch CHANGELOG.md
-                  {
-                    echo -e "## [$VERSION] - $(date +%Y-%m-%d)\n"
-                    echo "${{ steps.changelog.outputs.changelog }}"
-                    echo ""
-                    cat CHANGELOG.md
-                  } > CHANGELOG.md.tmp
-                  mv CHANGELOG.md.tmp CHANGELOG.md
-
-                  git add CHANGELOG.md
-                  git commit -m "chore: update changelog for v$VERSION"
-                  git push origin "$BRANCH_NAME"
-
-                  HEAD_SHA=$(git rev-parse HEAD)
-
-                  # Create PR and capture the URL
-                  PR_URL=$(gh pr create \
-                    --title "chore: update changelog for v$VERSION" \
-                    --body "Automated changelog update for release v$VERSION" \
-                    --base main \
-                    --head "$BRANCH_NAME")
-
-                  echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
-
-                  # PRs created by GITHUB_TOKEN don't trigger pull_request events in other
-                  # workflows (GitHub security feature to prevent loops), so build-and-test.yml
-                  # won't run. Since this PR only changes CHANGELOG.md, set the required
-                  # status check directly to unblock auto-merge.
-                  gh api \
-                    -X POST \
-                    "repos/${{ github.repository }}/statuses/$HEAD_SHA" \
-                    -f state=success \
-                    -f context="all-tests-passed" \
-                    -f description="Changelog-only PR — no code changes"
-
-                  # Enable auto-merge (requires auto-merge to be enabled in repo settings)
-                  gh pr merge "$PR_URL" --auto --squash
-
-            - name: Wait for PR to be Merged
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  PR_URL="${{ steps.changelog_pr.outputs.pr_url }}"
-                  echo "Waiting for PR to be merged: $PR_URL"
-
-                  # Wait for up to 5 minutes for the PR to be merged
-                  for i in {1..30}; do
-                    STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
-                    echo "PR state: $STATE (attempt $i/30)"
-
-                    if [ "$STATE" = "MERGED" ]; then
-                      echo "PR has been merged!"
-                      break
-                    elif [ "$STATE" = "CLOSED" ]; then
-                      echo "::error::PR was closed without merging"
-                      exit 1
-                    fi
-
-                    sleep 10
-                  done
-
-                  # Final check
-                  STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
-                  if [ "$STATE" != "MERGED" ]; then
-                    echo "::error::PR was not merged within the timeout period. Current state: $STATE"
-                    exit 1
-                  fi
-
-            - name: Checkout Updated Main
-              uses: actions/checkout@v6
-              with:
-                  ref: main
-                  fetch-depth: 0
+                  # Force update the major tag to point to this new release
+                  git tag -f "v$MAJOR_VERSION"
+                  git push -f origin "v$MAJOR_VERSION"
 
             - name: Update References for Release
               run: |
-                  # Create a release branch from updated main
+                  # Create a release branch to hold the @main→@vX reference substitution.
+                  # This branch is not merged back; its purpose is only to carry the
+                  # pinned-reference variant of the action files.
                   git checkout -b "release/v$VERSION"
 
                   # Replace @main with @v{major} in action.yml and sub-actions
@@ -159,29 +69,12 @@ jobs:
                     echo "No changes to commit (references might already be correct or using relative paths)."
                   fi
 
-            - name: Tagging
-              run: |
-                  # Tag specific version
-                  git tag "v$VERSION"
-                  git push origin "v$VERSION"
-
-                  # Tag/Move major version
-                  # Force update the major tag to point to this new release
-                  git tag -f "v$MAJOR_VERSION"
-                  git push -f origin "v$MAJOR_VERSION"
-
             - name: Create Release
               uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
               with:
                   tag_name: "v${{ inputs.version }}"
                   name: "v${{ inputs.version }}"
-                  body: ${{ steps.changelog.outputs.changelog }}
+                  generate_release_notes: true
                   prerelease: false
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Cleanup
-              if: always()
-              run: |
-                  # Delete the changelog branch if it still exists
-                  git push origin --delete "chore/changelog-v$VERSION" || true
