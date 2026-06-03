@@ -12,22 +12,45 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# No workflow-level permissions — each job declares exactly what it needs.
+permissions: {}
+
 jobs:
-  build-dist:
-    runs-on: [ubuntu-latest]
+  # Runs fork/PR code with read-only token. No write access here.
+  # For fork PRs: also validates that dist is in sync (fails if not).
+  # For same-repo PRs: uploads the compiled dist as a short-lived artifact
+  #   for commit-dist to consume.
+  build-test-core:
+    runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     outputs:
-      committed_sha: ${{ steps.commit_dist.outputs.commit_sha }}
+      artifact-id: ${{ steps.upload-dist.outputs.artifact-id }}
+      dist-dirty: ${{ steps.check-dirty.outputs.dirty }}
     steps:
+      - name: Resolve checkout ref
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ "$HEAD_REPO" == "${{ github.repository }}" ]]; then
+            # Same-repo PR: use branch ref so git status compares against the branch tip
+            echo "CHECKOUT_REF=$HEAD_REF" >> "$GITHUB_ENV"
+          else
+            # Fork PR: use refs/pull/N/head — maintained by GitHub in the base repo,
+            # so no cross-repo clone is needed and the CodeQL unsafe-checkout rule is satisfied
+            echo "CHECKOUT_REF=refs/pull/$PR_NUMBER/head" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN}}
+          ref: ${{ env.CHECKOUT_REF }}
+          # persist-credentials: false so the read-only token is not stored in
+          # the git credential helper and is unavailable to npm scripts.
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -47,35 +70,148 @@ jobs:
         working-directory: .github/actions/core
         run: npm run build
 
-      - name: Commit build artifacts (same-repo PRs only)
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        id: commit_dist
-        uses: EndBug/add-and-commit@290ea2c423ad77ca9c62ae0f5b224379612c0321 # v10.0.0
-        with:
-          add: "."
-          message: "chore: build core action dist (auto)"
-          default_author: github_actions
-          push: true
-
-      - name: Fail if dist is dirty (Forked PRs only)
+      - name: Fail if dist is dirty (fork PRs only)
+        id: check-dirty
         if: github.event.pull_request.head.repo.full_name != github.repository
         working-directory: .github/actions/core
         run: |
           if [[ -n $(git status --porcelain dist) ]]; then
+            echo "dirty=true" >> "$GITHUB_OUTPUT"
             echo "::error::The 'dist' folder is out of sync with the source code."
             echo "::error::Because this is a forked PR, we cannot automatically commit the changes."
             echo "::error::Please run 'npm run build' in '.github/actions/core' locally and commit the changes."
             exit 1
           fi
 
-  test-python:
-    needs: build-dist
-    runs-on: [ubuntu-latest]
+      - name: Upload dist artifact (same-repo PRs only)
+        id: upload-dist
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-artifact
+          path: .github/actions/core/dist/
+          retention-days: 1 # commit-dist deletes it immediately; this is a safety net
+
+  # Posts a PR comment when the dist check fails on fork PRs.
+  # Isolated into its own job so pull-requests:write is never held by the job
+  # that executes untrusted fork code.
+  comment-dist-dirty:
+    needs: build-test-core
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'failure' &&
+      needs.build-test-core.outputs.dist-dirty == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post dist-out-of-sync comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/comment.md << 'EOF'
+          > [!WARNING]
+          > The `dist` folder is out of sync with the source code.
+          >
+          > Because this is a forked PR, the workflow cannot automatically commit the updated build artifacts.
+          > Please run the following commands locally and push the result:
+          >
+          > ```bash
+          > cd .github/actions/core
+          > npm run build
+          > git add dist/
+          > git commit -m "chore: build core action dist"
+          > git push
+          > ```
+          EOF
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/comment.md \
+            --edit-last || \
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/comment.md
+
+  # Commits the pre-built dist artifact back to the PR branch.
+  # Only runs for same-repo PRs — fork PR validation is handled entirely in
+  # build-test-core, so this job never touches fork data.
+  # The checkout is of a branch that lives in THIS repository (not a fork),
+  # so it does not trigger the CodeQL "unsafe checkout in privileged context" rule.
+  commit-dist:
+    needs: build-test-core
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
+      actions: write # needed to delete the dist artifact after use
+    outputs:
+      committed_sha: ${{ steps.commit_dist.outputs.sha }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Default checkout (no ref:) avoids the CodeQL CWE-829 "unsafe checkout"
+          # rule. We switch to the PR branch in the run: step below via an env var
+          # so the branch name is never interpolated into an actions/checkout input.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-artifact
+          path: /tmp/dist-artifact/
+
+      - name: Commit and push dist to PR branch
+        id: commit_dist
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Derive the PR head branch purely from git history so no GitHub
+          # event/context data flows into the git checkout command (CodeQL taint-free).
+          # For a pull_request checkout, HEAD is the merge commit; HEAD^2 is the PR head.
+          PR_HEAD=$(git rev-parse HEAD^2)
+          BRANCH=$(git branch -r --contains "$PR_HEAD" --format='%(refname:short)' \
+            | grep '^origin/' | grep -v 'origin/HEAD' | head -1 | sed 's|^origin/||')
+          if [[ -z "$BRANCH" ]]; then
+            echo "::error::Could not determine PR branch from git history."
+            exit 1
+          fi
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          cp -r /tmp/dist-artifact/. .github/actions/core/dist/
+          git add .github/actions/core/dist/
+          if git diff --staged --quiet; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore: build core action dist (auto)"
+          git push origin "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Delete dist artifact
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE \
+            "/repos/${{ github.repository }}/actions/artifacts/${{ needs.build-test-core.outputs.artifact-id }}"
+
+  test-python:
+    needs: [build-test-core, commit-dist]
+    # commit-dist is skipped for fork PRs; treat 'skipped' as OK so fork PR tests still run.
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
+    runs-on: [ubuntu-latest]
+    permissions:
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -101,13 +237,19 @@ jobs:
           fi
 
   test-npm:
-    needs: build-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -133,13 +275,19 @@ jobs:
           fi
 
   test-maven:
-    needs: build-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -167,13 +315,19 @@ jobs:
           fi
 
   test-version-file:
-    needs: build-dist
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
     runs-on: [ubuntu-latest]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
@@ -200,7 +354,7 @@ jobs:
 
   all-tests-passed:
     if: always()
-    needs: [build-dist, test-python, test-npm, test-maven, test-version-file]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
@@ -215,11 +369,11 @@ jobs:
           fi
 
       - name: Set Commit Status
-        uses: myrotvorets/set-commit-status-action@2c3557527522d8d38f410941902b64a4be75a0ec # master
+        uses: myrotvorets/set-commit-status-action@3730c0a348a2ace3c110851bed53331bc6406e9f # v2.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           status: ${{ steps.status.outputs.status }}
-          sha: ${{ needs.build-dist.outputs.committed_sha || github.event.pull_request.head.sha }}
+          sha: ${{ needs.commit-dist.outputs.committed_sha || github.event.pull_request.head.sha }}
           context: "all-tests-passed"
           description: "Aggregation of all tests"
 
