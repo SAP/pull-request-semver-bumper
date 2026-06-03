@@ -24,36 +24,22 @@ jobs:
                   echo "MAJOR_VERSION=$(echo ${{ inputs.version }} | cut -d. -f1)" >> $GITHUB_ENV
 
             - name: Checkout
-              uses: actions/checkout@v6
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
               with:
                   fetch-depth: 0
 
-            - name: Tagging
+            - name: Prepare Release Branch
               run: |
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
-                  # Tag main directly so the tag is reachable from main.
-                  # This ensures GitHub's release notes range computation works correctly,
-                  # using the previous release tag rather than the repo's initial commit.
-                  git tag "v$VERSION"
-                  git push origin "v$VERSION"
-
-                  # Force update the major tag to point to this new release
-                  git tag -f "v$MAJOR_VERSION"
-                  git push -f origin "v$MAJOR_VERSION"
-
-            - name: Update References for Release
-              run: |
-                  # Create a release branch to hold the @main→@vX reference substitution.
-                  # This branch is not merged back; its purpose is only to carry the
-                  # pinned-reference variant of the action files.
                   git checkout -b "release/v$VERSION"
 
-                  # Replace @main with @v{major} in action.yml and sub-actions
-                  find . -name "action.yml" -print0 | xargs -0 sed -i "s|@main|@v$MAJOR_VERSION|g"
+                  # Replace @main with @v{major} in action.yml and sub-actions so that
+                  # consumers pinning to vX.Y.Z get pinned references, not floating @main.
+                  find . -name "action.yml" -not -path "./node_modules/*" -print0 \
+                    | xargs -0 sed -i "s|@main|@v$MAJOR_VERSION|g"
 
-                  # Verify if any changes were made
                   git diff
 
             - name: Commit Release Changes
@@ -61,13 +47,26 @@ jobs:
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
-                  # Only commit if there are changes
                   if ! git diff --quiet; then
                     git add .
                     git commit -m "chore: prepare release v$VERSION"
                   else
                     echo "No changes to commit (references might already be correct or using relative paths)."
                   fi
+
+            - name: Tag and Push
+              run: |
+                  # Tag the release branch commit (with substituted references).
+                  # GitHub's release notes use the releases API for range computation,
+                  # not git describe from main, so tag placement on a release branch is fine.
+                  git tag "v$VERSION"
+
+                  # Force update the major tag to point to this new release
+                  git tag -f "v$MAJOR_VERSION"
+
+                  git push origin "release/v$VERSION"
+                  git push origin "v$VERSION"
+                  git push -f origin "v$MAJOR_VERSION"
 
             - name: Create Release
               uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
