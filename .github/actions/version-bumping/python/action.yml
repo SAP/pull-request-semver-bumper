@@ -63,7 +63,7 @@ runs:
 
     - name: Bump up project version
       id: bump
-      uses: sap/pull-request-semver-bumper/.github/actions/core@main
+      uses: sap/pull-request-semver-bumper/.github/actions/core@v1
       with:
         build-type: "python"
         pyproject-file: ${{ inputs.pyproject-file }}
