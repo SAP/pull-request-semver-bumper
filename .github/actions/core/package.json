@@ -17,10 +17,12 @@
     "parse-commit-message": "^5.0.4",
     "pom-parser": "^1.2.0",
     "semver": "^7.7.4",
-    "simple-git": "^3.36.0"
+    "simple-git": "^3.36.0",
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.6.2",
     "@types/semver": "^7.7.1",
     "@vercel/ncc": "^0.38.4",

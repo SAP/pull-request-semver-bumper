@@ -22,7 +22,8 @@ async function run(): Promise<void> {
             pom: core.getInput('pom-file') || 'pom.xml',
             pkg: core.getInput('package-json-file') || 'package.json',
             version: core.getInput('version-file') || 'VERSION',
-            py: core.getInput('pyproject-file') || 'pyproject.toml'
+            py: core.getInput('pyproject-file') || 'pyproject.toml',
+            chart: core.getInput('chart-file') || 'Chart.yaml'
         };
 
         const eventPath = process.env.GITHUB_EVENT_PATH;

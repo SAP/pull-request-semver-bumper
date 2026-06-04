@@ -3,11 +3,12 @@ import { BUILD_TYPE } from '../types/build-type.js';
 import { getFileFromDefaultBranch } from '../git/git.js';
 import { parsePom } from '../utils/pom.js';
 import { fetchPomPath } from '../utils/file.js';
+import yaml from 'js-yaml';
 
 export async function fetchCurrentVersion(
     git: SimpleGit,
     type: BUILD_TYPE,
-    files: { pom: string; pkg: string; version: string; py: string },
+    files: { pom: string; pkg: string; version: string; py: string; chart: string },
     defaultBranch: string,
     versionPropertyPath: string
 ): Promise<string> {
@@ -38,6 +39,15 @@ export async function fetchCurrentVersion(
             const m = content.match(/version\s*=\s*"(.*?)"/);
             if (!m) throw new Error(`Version not found in ${files.py}`);
             return m[1];
+        }
+
+        case BUILD_TYPE.HELM: {
+            const content = await getFileFromDefaultBranch(git, files.chart, defaultBranch);
+            const parsed = yaml.load(content) as Record<string, unknown>;
+            if (!parsed || !parsed.version) {
+                throw new Error(`Version not found in ${files.chart}`);
+            }
+            return String(parsed.version).trim();
         }
     }
 }

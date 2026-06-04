@@ -6,7 +6,7 @@ branding:
 
 inputs:
   type:
-    description: "Project type to bump (maven, npm, python, version-file)"
+    description: "Project type to bump (maven, npm, python, version-file, helm)"
     required: true
   token:
     description: "GitHub token with permission to fetch PR status and commit changes"
@@ -56,17 +56,21 @@ inputs:
     description: "Path to version file (version-file only)"
     default: "VERSION"
     required: false
+  chart-yaml-file:
+    description: "Path to Chart.yaml (helm only)"
+    default: "Chart.yaml"
+    required: false
 
 outputs:
   bumped:
     description: "True if version was bumped"
-    value: ${{ steps.bump_maven.outputs.bumped || steps.bump_npm.outputs.bumped || steps.bump_python.outputs.bumped || steps.bump_version_file.outputs.bumped }}
+    value: ${{ steps.bump_maven.outputs.bumped || steps.bump_npm.outputs.bumped || steps.bump_python.outputs.bumped || steps.bump_version_file.outputs.bumped || steps.bump_helm.outputs.bumped }}
   new-version:
     description: "The new version"
-    value: ${{ steps.bump_maven.outputs.new-version || steps.bump_npm.outputs.new-version || steps.bump_python.outputs.new-version || steps.bump_version_file.outputs.new-version }}
+    value: ${{ steps.bump_maven.outputs.new-version || steps.bump_npm.outputs.new-version || steps.bump_python.outputs.new-version || steps.bump_version_file.outputs.new-version || steps.bump_helm.outputs.new-version }}
   bumpLevel:
     description: "The computed SemVer bump level (major, minor, patch)"
-    value: ${{ steps.bump_maven.outputs.bumpLevel || steps.bump_npm.outputs.bumpLevel || steps.bump_python.outputs.bumpLevel || steps.bump_version_file.outputs.bumpLevel }}
+    value: ${{ steps.bump_maven.outputs.bumpLevel || steps.bump_npm.outputs.bumpLevel || steps.bump_python.outputs.bumpLevel || steps.bump_version_file.outputs.bumpLevel || steps.bump_helm.outputs.bumpLevel }}
 
 runs:
   using: "composite"
@@ -127,3 +131,17 @@ runs:
         git-useremail: ${{ inputs.git-useremail }}
         post-command: ${{ inputs.post-command }}
         version-file: ${{ inputs.version-file }}
+
+    - name: Bump Helm
+      if: inputs.type == 'helm'
+      id: bump_helm
+      uses: sap/pull-request-semver-bumper/.github/actions/version-bumping/helm@main
+      with:
+        token: ${{ inputs.token }}
+        dry-run: ${{ inputs.dry-run }}
+        bump-command: ${{ inputs.bump-command || 'yq e ''.version = "@NEW_VERSION@"'' -i Chart.yaml' }}
+        commit-message: ${{ inputs.commit-message }}
+        git-username: ${{ inputs.git-username }}
+        git-useremail: ${{ inputs.git-useremail }}
+        post-command: ${{ inputs.post-command }}
+        chart-yaml-file: ${{ inputs.chart-yaml-file }}

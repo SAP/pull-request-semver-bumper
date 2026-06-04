@@ -7,7 +7,7 @@ jest.mock('../utils/executeCommand');
 const mockExecute = executeCommand as jest.Mock;
 
 describe('updateLocalVersion', () => {
-    const files = { pom: 'pom.xml', pkg: 'package.json', version: 'VERSION', py: 'pyproject.toml' };
+    const files = { pom: 'pom.xml', pkg: 'package.json', version: 'VERSION', py: 'pyproject.toml', chart: 'Chart.yaml' };
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -39,5 +39,16 @@ describe('updateLocalVersion', () => {
     it('should update Version File', async () => {
         await updateLocalVersion(BUILD_TYPE.VERSION_FILE, 'echo @NEW_VERSION@ > VERSION', '1.0.1', files);
         expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('echo 1.0.1 > VERSION'));
+    });
+
+    it('should update Helm Chart version', async () => {
+        await updateLocalVersion(BUILD_TYPE.HELM, 'yq e \'.version = "@NEW_VERSION@"\' -i Chart.yaml', '2.0.0', files);
+        expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('2.0.0'));
+        expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('cd .'));
+    });
+
+    it('should update Helm Chart version with custom path', async () => {
+        await updateLocalVersion(BUILD_TYPE.HELM, 'yq e \'.version = "@NEW_VERSION@"\' -i Chart.yaml', '2.0.0', { ...files, chart: 'charts/my-app/Chart.yaml' });
+        expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('cd charts/my-app'));
     });
 });

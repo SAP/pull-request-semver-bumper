@@ -22,6 +22,10 @@ inputs:
     description: "pyproject toml file, only relevant for buildType python"
     default: "pyproject.toml"
     required: false
+  chart-file:
+    description: "Where to find the Chart.yaml file, only relevant for buildType helm"
+    default: "Chart.yaml"
+    required: false
   bump-command:
     description: "Command to update the version"
     default: ""
