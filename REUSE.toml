@@ -10,6 +10,7 @@ path = [
     ".github/**",
     "action.yml",
     "test-resources/**",
+    "openspec/**",
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",

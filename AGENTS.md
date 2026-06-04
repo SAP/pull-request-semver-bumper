@@ -56,7 +56,7 @@ Pattern (each type follows this exactly):
 E2E tests use `dry-run: "true"` to skip git push. They require sed-patching `@main` references to local paths:
 ```bash
 sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
-sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/<type>@[^[:space:]"]+|./.github/actions/version-bumping/<type>|g' action.yml
+sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
 ```
 
 E2E tests pass `default-branch: ${{ github.head_ref }}` so version fetching reads from the PR branch (where test fixtures live). This override **only takes effect when `dry-run` is true** — in production, the PR base branch from the event payload is always used regardless of this input.
