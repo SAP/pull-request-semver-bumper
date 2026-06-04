@@ -120,6 +120,10 @@ export function updateLocalVersion(
 
         case BUILD_TYPE.HELM: {
             command = bumpCommand.replace("@NEW_VERSION@", newVersion);
+            // Replace hardcoded Chart.yaml with actual filename if different
+            if (fileName !== "Chart.yaml") {
+                command = command.replace(/Chart\.yaml/g, fileName);
+            }
             [cmd, ...args] = command.split(/\s+/);
             break;
         }

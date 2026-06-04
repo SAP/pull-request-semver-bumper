@@ -51,4 +51,11 @@ describe('updateLocalVersion', () => {
         await updateLocalVersion(BUILD_TYPE.HELM, 'yq e \'.version = "@NEW_VERSION@"\' -i Chart.yaml', '2.0.0', { ...files, chart: 'charts/my-app/Chart.yaml' });
         expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('cd charts/my-app'));
     });
+
+    it('should update Helm Chart version with non-default filename', async () => {
+        await updateLocalVersion(BUILD_TYPE.HELM, 'yq e \'.version = "@NEW_VERSION@"\' -i Chart.yaml', '3.0.0', { ...files, chart: 'charts/my-app/Chart-prod.yaml' });
+        expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('cd charts/my-app'));
+        expect(mockExecute).toHaveBeenCalledWith(expect.stringContaining('Chart-prod.yaml'));
+        expect(mockExecute).not.toHaveBeenCalledWith(expect.stringContaining('Chart.yaml'));
+    });
 });
