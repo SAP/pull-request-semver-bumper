@@ -12,6 +12,7 @@ path = [
     "test-resources/**",
     "README.md",
     "CONTRIBUTING.md",
+    "AGENTS.md",
     ".gitignore",
     ".husky/**",
     "package-lock.json",
