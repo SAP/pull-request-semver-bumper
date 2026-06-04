@@ -1,5 +1,5 @@
 name: "pull-request-semver-bumper"
-description: "Automated semantic version bumping for Maven, NPM, Python, and generic projects."
+description: "Automated semantic version bumping for Maven, NPM, Python, Helm, and generic projects."
 branding:
   icon: "git-merge"
   color: "blue"
