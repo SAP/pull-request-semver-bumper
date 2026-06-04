@@ -238,6 +238,7 @@ jobs:
           type: python
           token: ${{ secrets.GITHUB_TOKEN }}
           pyproject-file: "test-resources/python/pyproject.toml"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -276,6 +277,7 @@ jobs:
           type: npm
           token: ${{ secrets.GITHUB_TOKEN }}
           package-json-file: "test-resources/npm/package.json"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -314,6 +316,7 @@ jobs:
           type: maven
           token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: "true"
+          default-branch: ${{ github.head_ref }}
           pom-file: "test-resources/maven/pom.xml"
           # removed actual settings.xml to avoid fetch setting in this simple test
           bump-command: "mvn org.codehaus.mojo:versions-maven-plugin:set -DnewVersion=@NEW_VERSION@"
@@ -354,6 +357,7 @@ jobs:
           type: version-file
           token: ${{ secrets.GITHUB_TOKEN }}
           version-file: "test-resources/version-file/VERSION"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -392,6 +396,7 @@ jobs:
           type: helm
           token: ${{ secrets.GITHUB_TOKEN }}
           chart-yaml-file: "test-resources/helm/Chart.yaml"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs

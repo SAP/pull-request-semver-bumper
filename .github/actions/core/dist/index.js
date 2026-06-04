@@ -57743,8 +57743,8 @@ async function run() {
         if (!prTitle) {
             throw new Error('Pull request title not found in event payload.');
         }
-        const defaultBranch = event?.pull_request?.base?.ref;
-        info(`Using PR base branch as default branch: ${defaultBranch}`);
+        const defaultBranch = getInput('default-branch') || event?.pull_request?.base?.ref;
+        info(`Using default branch: ${defaultBranch}`);
         const versionPropertyPath = getInput('version-property-path');
         const currentVersion = await fetchCurrentVersion(git, buildType, files, defaultBranch, versionPropertyPath);
         const level = determineVersionLevelFromPRTitle(prTitle);

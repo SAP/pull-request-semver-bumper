@@ -57,6 +57,10 @@ inputs:
     description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
+  default-branch:
+    description: "Override the default branch for version fetching. If empty, uses the PR base branch from the event payload."
+    default: ""
+    required: false
 outputs:
   bumped:
     description: "True if version was bumped"
