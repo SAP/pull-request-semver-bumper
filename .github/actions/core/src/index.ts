@@ -47,7 +47,8 @@ async function run(): Promise<void> {
             throw new Error('Pull request title not found in event payload.');
         }
 
-        const defaultBranch = core.getInput('default-branch') || event?.pull_request?.base?.ref;
+        const defaultBranchOverride = core.getInput('default-branch');
+        const defaultBranch = (dryRun && defaultBranchOverride) ? defaultBranchOverride : event?.pull_request?.base?.ref;
         core.info(`Using default branch: ${defaultBranch}`);
 
         const versionPropertyPath = core.getInput('version-property-path')

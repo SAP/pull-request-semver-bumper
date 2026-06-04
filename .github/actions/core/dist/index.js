@@ -57743,7 +57743,8 @@ async function run() {
         if (!prTitle) {
             throw new Error('Pull request title not found in event payload.');
         }
-        const defaultBranch = getInput('default-branch') || event?.pull_request?.base?.ref;
+        const defaultBranchOverride = getInput('default-branch');
+        const defaultBranch = (dryRun && defaultBranchOverride) ? defaultBranchOverride : event?.pull_request?.base?.ref;
         info(`Using default branch: ${defaultBranch}`);
         const versionPropertyPath = getInput('version-property-path');
         const currentVersion = await fetchCurrentVersion(git, buildType, files, defaultBranch, versionPropertyPath);
