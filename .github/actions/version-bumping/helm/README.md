@@ -25,6 +25,7 @@ It reads the `version` field from a specified `Chart.yaml` file using YAML parsi
 | `git-useremail` | String | No | `github-actions[bot]@users.noreply.github.com` | Git author email. |
 | `commit-message` | String | No | `chore: bump version to @NEW_VERSION@` | Commit message. Use `@NEW_VERSION@` to insert the bumped version. |
 | `dry-run` | String | No | `false` | If true, skip git checkout, pull, and push. |
+| `default-branch` | String | No | `''` | Override default branch for version fetching (only effective when dry-run is true). |
 
 ### Supported Bump Commands
 

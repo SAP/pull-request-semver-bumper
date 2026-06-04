@@ -58,7 +58,7 @@ inputs:
     default: "false"
     required: false
   default-branch:
-    description: "Override the default branch for version fetching. If empty, uses the PR base branch from the event payload."
+    description: "Override the default branch for version fetching (only effective when dry-run is true). If empty or dry-run is false, uses the PR base branch from the event payload."
     default: ""
     required: false
 outputs:

@@ -59,6 +59,8 @@ sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|
 sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/<type>@[^[:space:]"]+|./.github/actions/version-bumping/<type>|g' action.yml
 ```
 
+E2E tests pass `default-branch: ${{ github.head_ref }}` so version fetching reads from the PR branch (where test fixtures live). This override **only takes effect when `dry-run` is true** — in production, the PR base branch from the event payload is always used regardless of this input.
+
 The `all-tests-passed` job gates PR mergeability — add new type jobs to its `needs:` list.
 
 ## Fork Contribution Quirk

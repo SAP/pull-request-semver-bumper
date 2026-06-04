@@ -52,6 +52,10 @@ Helm charts use `Chart.yaml` with a top-level `version` field for the chart's se
 - Chosen: Add `js-yaml` (+ `@types/js-yaml`) to `.github/actions/core/package.json`. Bundled by `ncc` into `dist/`.
 - Reason: The dependency is needed at runtime for version parsing. `ncc` bundles it into a single file, so there's no runtime installation required.
 
+**Decision: default-branch input with dry-run guard**
+- Chosen: Add a `default-branch` input to the core action, composite wrappers, and gateway. The override is only effective when `dry-run` is `true`. In production (`dry-run: false`), the PR base branch from the event payload is always used.
+- Reason: E2E tests restructure test-resources into new subfolders that don't yet exist on the default branch when the PR introducing them runs. The override lets CI read fixtures from the PR branch. Gating behind `dry-run` prevents misuse in production — version fetching must always compare against the actual default branch to compute correct semver bumps.
+
 ## Risks / Trade-offs
 
 - [js-yaml adds bundle size] → Minimal impact; `js-yaml` is ~70KB and `ncc` tree-shakes unused code. The `dist/` folder is already committed.
