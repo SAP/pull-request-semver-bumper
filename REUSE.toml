@@ -15,8 +15,6 @@ path = [
     ".gitignore",
     ".husky/**",
     "package-lock.json",
-    "configuration.json",
-    "CHANGELOG.md",
     "renovate.json"
 ]
 precedence = "aggregate"
