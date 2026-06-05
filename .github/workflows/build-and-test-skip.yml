@@ -7,10 +7,10 @@
 # requires for merge.
 #
 # This workflow runs in the inverse case (`paths:` is the inverse of
-# `paths-ignore:` in build-and-test.yml) and reports `all-tests-passed`
-# = success directly, satisfying the ruleset without invoking the full
-# e2e suite. Both workflows share `name: Build & Test` so the status
-# context name (`all-tests-passed`) is identical.
+# `paths-ignore:` in build-and-test.yml). It still runs the REUSE compliance
+# check (which must pass on every PR regardless of changed paths), then reports
+# `all-tests-passed` based on that result. Both workflows share `name: Build & Test`
+# so the status context name (`all-tests-passed`) is identical.
 #
 # If a PR mixes ignored and non-ignored paths, BOTH workflows run.
 # The skip workflow finishes in seconds while the real workflow takes
@@ -46,17 +46,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  reuse-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6
+
   all-tests-passed:
+    if: always()
+    needs: [reuse-lint]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
     steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [[ ${{ contains(needs.*.result, 'failure') }} == 'true' || ${{ contains(needs.*.result, 'cancelled') }} == 'true' ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
       - name: Mark all-tests-passed (no-op for non-runtime changes)
         # Pinned to v2.0.1 SHA — third-party action, must not float on a tag.
         uses: myrotvorets/set-commit-status-action@3730c0a348a2ace3c110851bed53331bc6406e9f # v2.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          status: success
+          status: ${{ steps.status.outputs.status }}
           sha: ${{ github.event.pull_request.head.sha }}
           context: "all-tests-passed"
           description: "Skipped — PR only changes docs/workflow metadata"
+
+      - name: Fail if needed
+        if: steps.status.outputs.status == 'failure'
+        run: exit 1

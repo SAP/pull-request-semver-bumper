@@ -410,9 +410,20 @@ jobs:
             exit 1
           fi
 
+  reuse-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6
+
   all-tests-passed:
     if: always()
-    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm, reuse-lint]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
