@@ -369,10 +369,7 @@ jobs:
 
   reuse-lint:
     needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file]
-    if: >-
-      always() &&
-      needs.build-test-core.result == 'success' &&
-      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
