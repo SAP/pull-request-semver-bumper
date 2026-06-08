@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           ref: ${{ env.CHECKOUT_REF }}
@@ -164,7 +164,7 @@ jobs:
       committed_sha: ${{ steps.commit_dist.outputs.sha }}
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           # Default checkout (no ref:) avoids the CodeQL CWE-829 "unsafe checkout"
@@ -224,7 +224,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -263,7 +263,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -302,7 +302,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -343,7 +343,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -410,9 +410,22 @@ jobs:
             exit 1
           fi
 
+  reuse-lint:
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6
+
   all-tests-passed:
     if: always()
-    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm, reuse-lint]
     runs-on: ubuntu-latest
     permissions:
       statuses: write
