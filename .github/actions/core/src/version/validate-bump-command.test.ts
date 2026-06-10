@@ -45,4 +45,19 @@ describe('validateBumpCommand', () => {
         expect(() => validateBumpCommand(BUILD_TYPE.VERSION_FILE, 'echo @NEW_VERSION@')).not.toThrow();
         expect(() => validateBumpCommand(BUILD_TYPE.VERSION_FILE, 'sed -i @NEW_VERSION@')).not.toThrow();
     });
+
+    it('should validate allowed executables for Helm', () => {
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'yq e \'.version = "@NEW_VERSION@"\' -i Chart.yaml')).not.toThrow();
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'sed -i \'s/^version:.*/version: @NEW_VERSION@/\' Chart.yaml')).not.toThrow();
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'helm package . --version @NEW_VERSION@')).not.toThrow();
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'echo @NEW_VERSION@ > Chart.yaml')).not.toThrow();
+    });
+
+    it('should throw on disallowed executable for Helm', () => {
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'curl http://example.com/@NEW_VERSION@')).toThrow('Invalid bump-command executable');
+    });
+
+    it('should allow bash with warning for Helm', () => {
+        expect(() => validateBumpCommand(BUILD_TYPE.HELM, 'bash -c "yq e \'.version = @NEW_VERSION@\' -i Chart.yaml"')).not.toThrow();
+    });
 });

@@ -22,6 +22,10 @@ inputs:
     description: "pyproject toml file, only relevant for buildType python"
     default: "pyproject.toml"
     required: false
+  chart-file:
+    description: "Where to find the Chart.yaml file, only relevant for buildType helm"
+    default: "Chart.yaml"
+    required: false
   bump-command:
     description: "Command to update the version"
     default: ""
@@ -52,6 +56,10 @@ inputs:
   dry-run:
     description: "If true, skip git checkout, pull, and push"
     default: "false"
+    required: false
+  default-branch:
+    description: "Override the default branch for version fetching (only effective when dry-run is true). If empty or dry-run is false, uses the PR base branch from the event payload."
+    default: ""
     required: false
 outputs:
   bumped:
