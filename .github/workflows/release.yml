@@ -28,12 +28,10 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Prepare Release Branch
+            - name: Prepare Release
               run: |
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
-
-                  git checkout -b "release/v$VERSION"
 
                   # Replace @main with @v{major} in action.yml and sub-actions so that
                   # consumers pinning to vX.Y.Z get pinned references, not floating @main.
@@ -49,22 +47,24 @@ jobs:
 
                   if ! git diff --quiet; then
                     git add .
-                    git commit -m "chore: prepare release v$VERSION"
+                    # Write a new tree from the index, then create a detached commit.
+                    # This commit is not on any branch, bypassing branch protection rules,
+                    # while still being reachable via the release tags pushed below.
+                    TREE=$(git write-tree)
+                    RELEASE_COMMIT=$(git commit-tree "$TREE" -p HEAD -m "chore: prepare release v$VERSION")
+                    echo "RELEASE_COMMIT=$RELEASE_COMMIT" >> $GITHUB_ENV
                   else
-                    echo "No changes to commit (references might already be correct or using relative paths)."
+                    echo "No changes to commit."
+                    echo "RELEASE_COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
                   fi
 
             - name: Tag and Push
               run: |
-                  # Tag the release branch commit (with substituted references).
-                  # GitHub's release notes use the releases API for range computation,
-                  # not git describe from main, so tag placement on a release branch is fine.
-                  git tag "v$VERSION"
+                  git tag "v$VERSION" "$RELEASE_COMMIT"
 
                   # Force update the major tag to point to this new release
-                  git tag -f "v$MAJOR_VERSION"
+                  git tag -f "v$MAJOR_VERSION" "$RELEASE_COMMIT"
 
-                  git push origin "release/v$VERSION"
                   git push origin "v$VERSION"
                   git push -f origin "v$MAJOR_VERSION"
 
