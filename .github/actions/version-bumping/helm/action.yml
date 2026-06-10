@@ -57,7 +57,7 @@ runs:
         GITHUB_TOKEN: ${{ inputs.token }}
 
     - name: Install yq
-      uses: mikefarah/yq@f2176ca55ff1ed51b294bef2c32ab52f84f7f00f # v4.53.2
+      uses: mikefarah/yq@751d8ad57b84f1794661bc70c0afb92a22ad7b3c # v4.53.2
 
     - name: Bump up helm chart version
       id: bump
