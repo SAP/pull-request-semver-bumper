@@ -230,14 +230,15 @@ jobs:
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
-          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/python@[^[:space:]"]+|./.github/actions/version-bumping/python|g' action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
       - name: Test Python Action (Dry Run)
         id: version_bump
         uses: ./
         with:
           type: python
           token: ${{ secrets.GITHUB_TOKEN }}
-          pyproject-file: "test-resources/pyproject.toml"
+          pyproject-file: "test-resources/python/pyproject.toml"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -268,14 +269,15 @@ jobs:
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
-          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/npm@[^[:space:]"]+|./.github/actions/version-bumping/npm|g' action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
       - name: Test NPM Action (Dry Run)
         id: version_bump
         uses: ./
         with:
           type: npm
           token: ${{ secrets.GITHUB_TOKEN }}
-          package-json-file: "test-resources/package.json"
+          package-json-file: "test-resources/npm/package.json"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -306,7 +308,7 @@ jobs:
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
-          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/maven@[^[:space:]"]+|./.github/actions/version-bumping/maven|g' action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
       - name: Test Maven Action (Dry Run)
         id: version_bump
         uses: ./
@@ -314,7 +316,8 @@ jobs:
           type: maven
           token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: "true"
-          pom-file: "test-resources/pom.xml"
+          default-branch: ${{ github.head_ref }}
+          pom-file: "test-resources/maven/pom.xml"
           # removed actual settings.xml to avoid fetch setting in this simple test
           bump-command: "mvn org.codehaus.mojo:versions-maven-plugin:set -DnewVersion=@NEW_VERSION@"
 
@@ -346,14 +349,15 @@ jobs:
       - name: Patch composite actions for E2E
         run: |
           sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
-          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/version-file@[^[:space:]"]+|./.github/actions/version-bumping/version-file|g' action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
       - name: Test Version File Action (Dry Run)
         id: version_bump
         uses: ./
         with:
           type: version-file
           token: ${{ secrets.GITHUB_TOKEN }}
-          version-file: "test-resources/VERSION"
+          version-file: "test-resources/version-file/VERSION"
+          default-branch: ${{ github.head_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -367,8 +371,47 @@ jobs:
             exit 1
           fi
 
+  test-helm:
+    needs: [build-test-core, commit-dist]
+    if: >-
+      always() &&
+      needs.build-test-core.result == 'success' &&
+      (needs.commit-dist.result == 'success' || needs.commit-dist.result == 'skipped')
+    runs-on: [ubuntu-latest]
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Patch composite actions for E2E
+        run: |
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/core@[^[:space:]"]+|./.github/actions/core|g' .github/actions/version-bumping/*/action.yml
+          sed -i -E 's|sap/pull-request-semver-bumper/.github/actions/version-bumping/([^@]+)@[^[:space:]"]+|./.github/actions/version-bumping/\1|g' action.yml
+      - name: Test Helm Action (Dry Run)
+        id: version_bump
+        uses: ./
+        with:
+          type: helm
+          token: ${{ secrets.GITHUB_TOKEN }}
+          chart-yaml-file: "test-resources/helm/Chart.yaml"
+          default-branch: ${{ github.head_ref }}
+          dry-run: "true"
+
+      - name: Verify Outputs
+        run: |
+          echo "Bumped: ${{ steps.version_bump.outputs.bumped }}"
+          echo "New Version: ${{ steps.version_bump.outputs.new-version }}"
+          echo "Bump Level: ${{ steps.version_bump.outputs.bumpLevel }}"
+          echo "### Helm Test New Version: ${{ steps.version_bump.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
+          if [ -z "${{ steps.version_bump.outputs.bumped }}" ]; then
+            echo "Error: 'bumped' output is empty"
+            exit 1
+          fi
+
   reuse-lint:
-    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -382,7 +425,7 @@ jobs:
 
   all-tests-passed:
     if: always()
-    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, reuse-lint]
+    needs: [build-test-core, commit-dist, test-python, test-npm, test-maven, test-version-file, test-helm, reuse-lint]
     runs-on: ubuntu-latest
     permissions:
       statuses: write

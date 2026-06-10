@@ -13,7 +13,7 @@ const mockParsePom = parsePom as jest.Mock;
 
 describe('fetchCurrentVersion', () => {
     const mockGit = {} as any; // SimpleGit mock not needed deeply as we mock getFileFromDefaultBranch
-    const files = { pom: 'pom.xml', pkg: 'package.json', version: 'VERSION', py: 'pyproject.toml' };
+    const files = { pom: 'pom.xml', pkg: 'package.json', version: 'VERSION', py: 'pyproject.toml', chart: 'Chart.yaml' };
     const defaultBranch = 'main';
 
     beforeEach(() => {
@@ -51,5 +51,24 @@ describe('fetchCurrentVersion', () => {
         mockGetFile.mockResolvedValue('[tool.poetry]\nname="foo"');
         await expect(fetchCurrentVersion(mockGit, BUILD_TYPE.PYTHON, files, defaultBranch, ''))
             .rejects.toThrow('Version not found in pyproject.toml');
+    });
+
+    it('should fetch Helm Chart version', async () => {
+        mockGetFile.mockResolvedValue('apiVersion: v2\nname: my-chart\nversion: 1.2.3\nappVersion: "1.0.0"');
+        const version = await fetchCurrentVersion(mockGit, BUILD_TYPE.HELM, files, defaultBranch, '');
+        expect(version).toBe('1.2.3');
+        expect(mockGetFile).toHaveBeenCalledWith(mockGit, 'Chart.yaml', 'main');
+    });
+
+    it('should fetch Helm Chart quoted version', async () => {
+        mockGetFile.mockResolvedValue('apiVersion: v2\nname: my-chart\nversion: "2.0.0"');
+        const version = await fetchCurrentVersion(mockGit, BUILD_TYPE.HELM, files, defaultBranch, '');
+        expect(version).toBe('2.0.0');
+    });
+
+    it('should throw if Helm Chart version not found', async () => {
+        mockGetFile.mockResolvedValue('apiVersion: v2\nname: my-chart\nappVersion: "1.0.0"');
+        await expect(fetchCurrentVersion(mockGit, BUILD_TYPE.HELM, files, defaultBranch, ''))
+            .rejects.toThrow('Version not found in Chart.yaml');
     });
 });
