@@ -51,7 +51,7 @@ with:
 | Input | Description | Default | Required |
 | :--- | :--- | :--- | :--- |
 | `type` | **Required**. Project type to bump (`maven`, `npm`, `python`, `version-file`, `helm`). | | Yes |
-| `token` | **Required**. GitHub token. | | Yes |
+| `token` | **Required**. GitHub token with permission to fetch PR status and commit changes. See [note on `GITHUB_TOKEN`](#github_token-and-status-checks) below. | | Yes |
 | `dry-run` | If true, skip git checkout, pull, and push. | `false` | No |
 | `default-branch` | Override default branch for version fetching (only effective when dry-run is true). | | No |
 | `bump-command` | Custom command to update version. | (auto) | No |
@@ -64,9 +64,27 @@ with:
 
 ### Outputs
 
-- `bumped`: True if version was bumped
-- `new-version`: The new version number
-- `bumpLevel`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+* `bumped`: True if version was bumped
+* `new-version`: The new version number
+* `bumpLevel`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+
+### `GITHUB_TOKEN` and Status Checks
+
+> ⚠️ **Important:** When you pass `secrets.GITHUB_TOKEN` as the `token` input,
+> commits pushed by this action are made by the `github-actions[bot]` identity.
+> GitHub intentionally does **not** re-trigger other workflow runs for such pushes
+> (to prevent infinite loops), so your other status checks (CI, tests, linting,
+> etc.) will **not** run on the version-bump commit.
+>
+> **To have other workflows re-run on the bump commit**, pass a
+> [Personal Access Token (PAT)](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+> or a
+> [GitHub App token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+> instead:
+>
+> ```yaml
+> token: ${{ secrets.MY_PAT }}
+> ```
 
 ## Contributing
 

@@ -9,7 +9,15 @@ inputs:
     description: "Project type to bump (maven, npm, python, version-file, helm)"
     required: true
   token:
-    description: "GitHub token with permission to fetch PR status and commit changes"
+    description: |
+      GitHub token with permission to fetch PR status and commit changes.
+      ⚠️ Using the default `secrets.GITHUB_TOKEN` means commits pushed by this
+      action are made by the `github-actions[bot]` identity. GitHub intentionally
+      does not re-trigger other workflow runs for such pushes (to prevent infinite
+      loops), so your other status checks (CI, tests, etc.) will NOT run on the
+      version-bump commit.
+      To have other workflows re-run, pass a Personal Access Token (PAT) or a
+      GitHub App token instead of `secrets.GITHUB_TOKEN`.
     required: true
   dry-run:
     description: "If true, skip git checkout, pull, and push"
