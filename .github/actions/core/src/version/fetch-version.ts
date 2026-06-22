@@ -3,7 +3,7 @@ import { BUILD_TYPE } from '../types/build-type.js';
 import { getFileFromDefaultBranch } from '../git/git.js';
 import { parsePom } from '../utils/pom.js';
 import { fetchPomPath } from '../utils/file.js';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 
 export async function fetchCurrentVersion(
     git: SimpleGit,
@@ -43,7 +43,7 @@ export async function fetchCurrentVersion(
 
         case BUILD_TYPE.HELM: {
             const content = await getFileFromDefaultBranch(git, files.chart, defaultBranch);
-            const parsed = yaml.load(content) as Record<string, unknown>;
+            const parsed = load(content) as Record<string, unknown>;
             if (!parsed || !parsed.version) {
                 throw new Error(`Version not found in ${files.chart}`);
             }
