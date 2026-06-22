@@ -18,7 +18,7 @@
     "pom-parser": "^1.2.0",
     "semver": "^7.7.4",
     "simple-git": "^3.36.0",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.0.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
