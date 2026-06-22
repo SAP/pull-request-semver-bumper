@@ -1,6 +1,7 @@
 # Pull Request Semver Bumper
 
 [![REUSE status](https://api.reuse.software/badge/github.com/SAP/pull-request-semver-bumper)](https://api.reuse.software/info/github.com/SAP/pull-request-semver-bumper)
+[![Latest Release](https://img.shields.io/github/v/release/SAP/pull-request-semver-bumper)](https://github.com/SAP/pull-request-semver-bumper/releases/latest)
 
 ## About this project
 
