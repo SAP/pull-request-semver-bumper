@@ -38,7 +38,7 @@ export function updateLocalVersion(
     buildType: BUILD_TYPE,
     bumpCommand: string,
     newVersion: string,
-    files: { pom: string; pkg: string; version: string; py: string }
+    files: { pom: string; pkg: string; version: string; py: string; chart: string }
 ): Promise<string> {
     // Accumulators for command construction
     let command = "";
@@ -63,6 +63,9 @@ export function updateLocalVersion(
             break;
         case BUILD_TYPE.PYTHON:
             filePath = files.py;
+            break;
+        case BUILD_TYPE.HELM:
+            filePath = files.chart;
             break;
         default:
             throw new Error(`Unsupported build type: ${buildType}`);
@@ -111,6 +114,16 @@ export function updateLocalVersion(
             command = bumpCommand
                 .replace("@NEW_VERSION@", newVersion);
 
+            [cmd, ...args] = command.split(/\s+/);
+            break;
+        }
+
+        case BUILD_TYPE.HELM: {
+            command = bumpCommand.replace("@NEW_VERSION@", newVersion);
+            // Replace hardcoded Chart.yaml with actual filename if different
+            if (fileName !== "Chart.yaml") {
+                command = command.replace(/Chart\.yaml/g, fileName);
+            }
             [cmd, ...args] = command.split(/\s+/);
             break;
         }

@@ -12,14 +12,13 @@ path = [
     "openspec/**",
     "action.yml",
     "test-resources/**",
+    "openspec/**",
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
     ".gitignore",
     ".husky/**",
     "package-lock.json",
-    "configuration.json",
-    "CHANGELOG.md",
     "renovate.json"
 ]
 precedence = "aggregate"

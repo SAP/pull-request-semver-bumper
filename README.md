@@ -1,6 +1,7 @@
 # Pull Request Semver Bumper
 
 [![REUSE status](https://api.reuse.software/badge/github.com/SAP/pull-request-semver-bumper)](https://api.reuse.software/info/github.com/SAP/pull-request-semver-bumper)
+[![Latest Release](https://img.shields.io/github/v/release/SAP/pull-request-semver-bumper)](https://github.com/SAP/pull-request-semver-bumper/releases/latest)
 
 ## About this project
 
@@ -11,7 +12,7 @@ This repository provides a suite of **Composite GitHub Actions** that automate s
 Most versioning tools run *after* a merge, creating a separate "release commit" that clutters your history and triggers extra CI runs. **Pull Request Semver Bumper** is different:
 
 * **Bump in PR**: The version bump happens inside the Pull Request. When you merge, the version is already updated. No extra commits, no race conditions.
-* **Multi-Language Support**: One unified workflow for **Maven**, **NPM**, **Python**, and generic **Version Files**.
+* **Multi-Language Support**: One unified workflow for **Maven**, **NPM**, **Python**, **Helm**, and generic **Version Files**.
 * **Standardized**: Fully compliant with [Conventional Commits](https://www.conventionalcommits.org/). Your commit history becomes your changelog.
 
 ## Requirements
@@ -27,6 +28,7 @@ Depending on your project type, you will also need:
 * **[Maven](https://maven.apache.org/)**: For Maven projects (requires `mvn` in the PATH).
 * **[NPM](https://www.npmjs.com/)**: For Node.js projects (requires `npm` in the PATH).
 * **[Python](https://www.python.org/) & [Poetry](https://python-poetry.org/)**: For Python projects (requires `poetry` in the PATH).
+* **[yq](https://github.com/mikefarah/yq)**: For Helm chart projects (automatically installed by the composite action).
 
 ## GitHub Marketplace Usage
 
@@ -35,34 +37,55 @@ You can use this action directly from the GitHub Marketplace. It supports multip
 ```yaml
 uses: sap/pull-request-semver-bumper@v1
 with:
-  type: 'npm' # Options: npm, maven, python, version-file
+  type: 'npm' # Options: npm, maven, python, version-file, helm
   token: ${{ secrets.GITHUB_TOKEN }}
   # Optional: Custom file paths
   package-json-file: 'custom/package.json' # For npm
   pom-file: 'custom/pom.xml'               # For maven
   pyproject-file: 'custom/pyproject.toml'  # For python
   version-file: 'custom/VERSION'           # For version-file
+  chart-yaml-file: 'custom/Chart.yaml'    # For helm
 ```
 
 ### Inputs
 
 | Input | Description | Default | Required |
 | :--- | :--- | :--- | :--- |
-| `type` | **Required**. Project type to bump (`maven`, `npm`, `python`, `version-file`). | | Yes |
-| `token` | **Required**. GitHub token. | | Yes |
+| `type` | **Required**. Project type to bump (`maven`, `npm`, `python`, `version-file`, `helm`). | | Yes |
+| `token` | **Required**. GitHub token with permission to fetch PR status and commit changes. See [note on `GITHUB_TOKEN`](#github_token-and-status-checks) below. | | Yes |
 | `dry-run` | If true, skip git checkout, pull, and push. | `false` | No |
+| `default-branch` | Override default branch for version fetching (only effective when dry-run is true). | | No |
 | `bump-command` | Custom command to update version. | (auto) | No |
 | `commit-message` | Custom commit message. Use `@NEW_VERSION@` to insert the bumped version. | `chore: bump version to @NEW_VERSION@` | No |
 | `package-json-file` | Path to package.json (npm only). | `package.json` | No |
 | `pom-file` | Path to pom.xml (maven only). | `pom.xml` | No |
 | `pyproject-file` | Path to pyproject.toml (python only). | `pyproject.toml` | No |
 | `version-file` | Path to version file (version-file only). | `VERSION` | No |
+| `chart-yaml-file` | Path to Chart.yaml (helm only). | `Chart.yaml` | No |
 
 ### Outputs
 
-- `bumped`: True if version was bumped
-- `new-version`: The new version number
-- `bumpLevel`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+* `bumped`: True if version was bumped
+* `new-version`: The new version number
+* `bumpLevel`: The computed SemVer bump level (`major`, `minor`, or `patch`)
+
+### `GITHUB_TOKEN` and Status Checks
+
+> ⚠️ **Important:** When you pass `secrets.GITHUB_TOKEN` as the `token` input,
+> commits pushed by this action are made by the `github-actions[bot]` identity.
+> GitHub intentionally does **not** re-trigger other workflow runs for such pushes
+> (to prevent infinite loops), so your other status checks (CI, tests, linting,
+> etc.) will **not** run on the version-bump commit.
+>
+> **To have other workflows re-run on the bump commit**, pass a
+> [Personal Access Token (PAT)](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+> or a
+> [GitHub App token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+> instead:
+>
+> ```yaml
+> token: ${{ secrets.MY_PAT }}
+> ```
 
 ## Contributing
 
@@ -117,6 +140,7 @@ Select the action that matches your project type for specific configuration and 
 | **[Python](.github/actions/version-bumping/python/README.md)** | `./.github/actions/version-bumping/python` | Supports `pyproject.toml` (Poetry). |
 | **[Maven](.github/actions/version-bumping/maven/README.md)** | `./.github/actions/version-bumping/maven` | Supports `pom.xml` via `versions-maven-plugin`. |
 | **[NPM](.github/actions/version-bumping/npm/README.md)** | `./.github/actions/version-bumping/npm` | Supports `package.json` via `npm version`. |
+| **[Helm](.github/actions/version-bumping/helm/README.md)** | `./.github/actions/version-bumping/helm` | Supports `Chart.yaml` via `yq`. |
 | **[Generic Version File](.github/actions/version-bumping/version-file/README.md)** | `./.github/actions/version-bumping/version-file` | Supports generic `VERSION` files. |
 
 For detailed documentation on specific ecosystem behaviors, click the links above.

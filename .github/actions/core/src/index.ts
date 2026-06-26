@@ -22,7 +22,8 @@ async function run(): Promise<void> {
             pom: core.getInput('pom-file') || 'pom.xml',
             pkg: core.getInput('package-json-file') || 'package.json',
             version: core.getInput('version-file') || 'VERSION',
-            py: core.getInput('pyproject-file') || 'pyproject.toml'
+            py: core.getInput('pyproject-file') || 'pyproject.toml',
+            chart: core.getInput('chart-file') || 'Chart.yaml'
         };
 
         const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -46,8 +47,9 @@ async function run(): Promise<void> {
             throw new Error('Pull request title not found in event payload.');
         }
 
-        const defaultBranch = event?.pull_request?.base?.ref;
-        core.info(`Using PR base branch as default branch: ${defaultBranch}`);
+        const defaultBranchOverride = core.getInput('default-branch');
+        const defaultBranch = (dryRun && defaultBranchOverride) ? defaultBranchOverride : event?.pull_request?.base?.ref;
+        core.info(`Using default branch: ${defaultBranch}`);
 
         const versionPropertyPath = core.getInput('version-property-path')
 

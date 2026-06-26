@@ -34,6 +34,10 @@ export function validateBumpCommand(buildType: BUILD_TYPE, bumpCommand: string):
             );
             break;
 
+        case BUILD_TYPE.HELM:
+            validateExecutable(cmd, ["yq", "sed", "helm", "echo"], buildType);
+            break;
+
         case BUILD_TYPE.VERSION_FILE:
             // very permissive, no special exec requirements
             return;

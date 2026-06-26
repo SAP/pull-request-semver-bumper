@@ -37,6 +37,10 @@ inputs:
     description: "If true, skip git checkout, pull, and push"
     default: "false"
     required: false
+  default-branch:
+    description: "Override the default branch for version fetching (only effective when dry-run is true)"
+    default: ""
+    required: false
 
 outputs:
   bumped:
@@ -73,3 +77,4 @@ runs:
         version-property-path: ${{ inputs.version-property-path }}
         post-command: ${{ inputs.post-command }}
         dry-run: ${{ inputs.dry-run }}
+        default-branch: ${{ inputs.default-branch }}
