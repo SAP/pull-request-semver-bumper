@@ -34,7 +34,7 @@ async function run(): Promise<void> {
 
         validateBumpCommand(buildType,command)
 
-        await configureGit(
+        const prBranch = await configureGit(
             git,
             core.getInput('token'),
             core.getInput('git-username'),
@@ -82,9 +82,9 @@ async function run(): Promise<void> {
             await git.commit(commitMessage);
 
             if (dryRun) {
-                core.info(`[DRY-RUN] Would push changes to origin/${core.getInput('pr-branch')}`);
+                core.info(`[DRY-RUN] Would push changes to origin/${prBranch}`);
             } else {
-                await git.push('origin', core.getInput('pr-branch'));
+                await git.push('origin', prBranch);
             }
 
             core.summary.addDetails("Version Bump", `Bumped version from ${currentVersion} to ${newVersion}`);

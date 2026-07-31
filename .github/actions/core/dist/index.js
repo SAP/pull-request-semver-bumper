@@ -54726,6 +54726,7 @@ async function configureGit(git, token, gitUsername, gitUserEmail, dryRun = fals
     }
     await git.addConfig('user.email', gitUserEmail);
     await git.addConfig('user.name', gitUsername);
+    return prBranch;
 }
 async function getFileFromDefaultBranch(git, filePath, defaultBranch) {
     try {
@@ -58532,7 +58533,7 @@ async function run() {
         }
         const event = JSON.parse(external_fs_.readFileSync(eventPath, 'utf8'));
         validateBumpCommand(buildType, command);
-        await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'), dryRun);
+        const prBranch = await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'), dryRun);
         const prTitle = event.pull_request?.title;
         if (!prTitle) {
             throw new Error('Pull request title not found in event payload.');
@@ -58557,10 +58558,10 @@ async function run() {
             const commitMessage = formatVersionBumpCommitMessage(getInput('commit-message'), newVersion);
             await git.commit(commitMessage);
             if (dryRun) {
-                info(`[DRY-RUN] Would push changes to origin/${getInput('pr-branch')}`);
+                info(`[DRY-RUN] Would push changes to origin/${prBranch}`);
             }
             else {
-                await git.push('origin', getInput('pr-branch'));
+                await git.push('origin', prBranch);
             }
             summary.addDetails("Version Bump", `Bumped version from ${currentVersion} to ${newVersion}`);
             setOutput('new-version', newVersion);

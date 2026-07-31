@@ -38,19 +38,21 @@ describe('git', () => {
     });
 
     it('should configure git', async () => {
-        await configureGit(mockSimpleGit as any, 'token', 'user', 'email');
+        const branch = await configureGit(mockSimpleGit as any, 'token', 'user', 'email');
         expect(mockSimpleGit.addConfig).toHaveBeenCalledWith('user.name', 'user');
         expect(mockSimpleGit.addConfig).toHaveBeenCalledWith('user.email', 'email');
         expect(mockSimpleGit.checkout).toHaveBeenCalledWith('feature/branch');
         expect(mockSimpleGit.pull).toHaveBeenCalled();
+        expect(branch).toBe('feature/branch');
     });
 
     it('should skip branch checkout and pull for dry runs', async () => {
-        await configureGit(mockSimpleGit as any, 'token', 'user', 'email', true);
+        const branch = await configureGit(mockSimpleGit as any, 'token', 'user', 'email', true);
         expect(mockSimpleGit.fetch).toHaveBeenCalledWith(['--all']);
         expect(mockSimpleGit.checkout).not.toHaveBeenCalled();
         expect(mockSimpleGit.pull).not.toHaveBeenCalled();
         expect(core.info).toHaveBeenCalledWith('[DRY-RUN] Skipping PR branch checkout and pull.');
+        expect(branch).toBe('feature/branch');
     });
 
     it('should get file from default branch', async () => {
