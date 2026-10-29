@@ -59,7 +59,7 @@ runs:
     - name: Setup Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: 24 # use stable LTS; previous 24 caused manifest warning
+        node-version: 26 # use stable LTS; previous 24 caused manifest warning
         check-latest: true
 
     - name: Install pnpm and yarn
