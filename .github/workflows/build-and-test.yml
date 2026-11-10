@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Checkout PR head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ env.CHECKOUT_REF }}
@@ -68,9 +68,9 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: 24 # use stable LTS; previous 24 caused manifest warning
+          node-version: 26 # use stable LTS; previous 24 caused manifest warning
           check-latest: true
 
       - name: Install dependencies
@@ -164,7 +164,7 @@ jobs:
       committed_sha: ${{ steps.commit_dist.outputs.sha }}
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           # Default checkout (no ref:) avoids the CodeQL CWE-829 "unsafe checkout"
@@ -224,7 +224,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -238,7 +238,7 @@ jobs:
           type: python
           token: ${{ secrets.GITHUB_TOKEN }}
           pyproject-file: "test-resources/python/pyproject.toml"
-          default-branch: ${{ github.head_ref }}
+          default-branch: ${{ github.base_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -263,7 +263,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -277,7 +277,7 @@ jobs:
           type: npm
           token: ${{ secrets.GITHUB_TOKEN }}
           package-json-file: "test-resources/npm/package.json"
-          default-branch: ${{ github.head_ref }}
+          default-branch: ${{ github.base_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -302,7 +302,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -316,7 +316,7 @@ jobs:
           type: maven
           token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: "true"
-          default-branch: ${{ github.head_ref }}
+          default-branch: ${{ github.base_ref }}
           pom-file: "test-resources/maven/pom.xml"
           # removed actual settings.xml to avoid fetch setting in this simple test
           bump-command: "mvn org.codehaus.mojo:versions-maven-plugin:set -DnewVersion=@NEW_VERSION@"
@@ -343,7 +343,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Patch composite actions for E2E
@@ -357,7 +357,7 @@ jobs:
           type: version-file
           token: ${{ secrets.GITHUB_TOKEN }}
           version-file: "test-resources/version-file/VERSION"
-          default-branch: ${{ github.head_ref }}
+          default-branch: ${{ github.base_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -396,7 +396,7 @@ jobs:
           type: helm
           token: ${{ secrets.GITHUB_TOKEN }}
           chart-yaml-file: "test-resources/helm/Chart.yaml"
-          default-branch: ${{ github.head_ref }}
+          default-branch: ${{ github.base_ref }}
           dry-run: "true"
 
       - name: Verify Outputs
@@ -417,7 +417,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: REUSE Compliance Check

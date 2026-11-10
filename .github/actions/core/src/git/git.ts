@@ -8,7 +8,7 @@ export async function configureGit(
     gitUsername: string,
     gitUserEmail: string,
     dryRun = false
-): Promise<void> {
+): Promise<string> {
 
     // -------------------------------
     // Restore original logic:
@@ -55,6 +55,7 @@ export async function configureGit(
     await git.addConfig('user.email', gitUserEmail);
     await git.addConfig('user.name', gitUsername);
 
+    return prBranch;
 }
 
 

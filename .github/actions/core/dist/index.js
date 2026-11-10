@@ -34311,7 +34311,7 @@ class Range {
     debug('hyphen replace', range)
 
     // `> 1.2.3 < 1.2.5` => `>1.2.3 <1.2.5`
-    range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace)
+    range = trimComparatorWhitespace(range)
     debug('comparator trim', range)
 
     // `~ 1.2.3` => `~1.2.3`
@@ -34416,11 +34416,11 @@ const parseOptions = __nccwpck_require__(356)
 const Comparator = __nccwpck_require__(9379)
 const debug = __nccwpck_require__(1159)
 const SemVer = __nccwpck_require__(7163)
+const trimComparatorWhitespace = __nccwpck_require__(9737)
 const {
   safeRe: re,
   src,
   t,
-  comparatorTrimReplace,
   tildeTrimReplace,
   caretTrimReplace,
 } = __nccwpck_require__(5471)
@@ -35803,6 +35803,35 @@ const MAX_SAFE_COMPONENT_LENGTH = 16
 // the shortest version with a build 0.0.0+BUILD.
 const MAX_SAFE_BUILD_LENGTH = MAX_LENGTH - 6
 
+// ECMAScript whitespace and line terminators matched by \s.
+const WHITESPACE_CHARACTERS = [
+  '\t',
+  '\n',
+  '\v',
+  '\f',
+  '\r',
+  ' ',
+  '\u00a0',
+  '\u1680',
+  '\u2000',
+  '\u2001',
+  '\u2002',
+  '\u2003',
+  '\u2004',
+  '\u2005',
+  '\u2006',
+  '\u2007',
+  '\u2008',
+  '\u2009',
+  '\u200a',
+  '\u2028',
+  '\u2029',
+  '\u202f',
+  '\u205f',
+  '\u3000',
+  '\ufeff',
+]
+
 const RELEASE_TYPES = [
   'major',
   'premajor',
@@ -35818,6 +35847,7 @@ module.exports = {
   MAX_SAFE_COMPONENT_LENGTH,
   MAX_SAFE_BUILD_LENGTH,
   MAX_SAFE_INTEGER,
+  WHITESPACE_CHARACTERS,
   RELEASE_TYPES,
   SEMVER_SPEC_VERSION,
   FLAG_INCLUDE_PRERELEASE: 0b001,
@@ -36180,6 +36210,451 @@ createToken('STAR', '(<|>)?=?\\s*\\*')
 // >=0.0.0 is like a star
 createToken('GTE0', '^\\s*>=\\s*0\\.0\\.0\\s*$')
 createToken('GTE0PRE', '^\\s*>=\\s*0\\.0\\.0-0\\s*$')
+
+
+/***/ }),
+
+/***/ 9737:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+// @ts-check
+
+
+// Reproduce safeRe[COMPARATORTRIM] replacement boundaries, not version
+// validation. Each end-index finder returns an exclusive end, or its start
+// on no match.
+// Positions count from zero. An end of 3 means characters 0, 1, and 2 were read;
+// range.slice(start, end) gives the matched text, not a converted number.
+const {
+  MAX_LENGTH,
+  MAX_SAFE_BUILD_LENGTH,
+  WHITESPACE_CHARACTERS,
+} = __nccwpck_require__(5101)
+
+/**
+ * Remembers the last two rows of digits so their characters need not be reread.
+ * Positions start at -1 until a row has been found.
+ *
+ * @typedef {object} DigitRunCache
+ * @property {number} start The first character of the most recently found row.
+ * @property {number} end The position after that row's last character.
+ * @property {number} previousStart The first character of the previous row.
+ * @property {number} previousEnd The position after the previous row.
+ */
+
+// One entry per UTF-16 code unit keeps membership checks constant-time.
+const whitespace = new Uint8Array(0x10000)
+for (const char of WHITESPACE_CHARACTERS) {
+  whitespace[char.charCodeAt(0)] = 1
+}
+
+/**
+ * Checks whether a character is whitespace, like a space, tab, or newline.
+ * Looking past the end of the string returns false.
+ *
+ * @param {string|undefined} char One character, or undefined past the string's end.
+ * @returns {boolean} Whether the character is whitespace.
+ * @example isWhitespace(' ') // true
+ * @example isWhitespace('1') // false
+ */
+const isWhitespace = char =>
+  char !== undefined && whitespace[char.charCodeAt(0)] === 1
+
+/**
+ * Checks for v, =, or whitespace before the version number.
+ * These are historical version prefixes, not range operators:
+ * < and > are handled separately, as are tilde and caret ranges.
+ *
+ * @param {string|undefined} char One character to check.
+ * @returns {boolean} Whether the character can belong to a version prefix.
+ * @example isVersionPrefix('=') // true
+ * @example isVersionPrefix('>') // false
+ */
+const isVersionPrefix = char =>
+  char === 'v' ||
+  char === '=' ||
+  isWhitespace(char)
+
+/**
+ * Checks whether a character is one of the digits 0 through 9.
+ *
+ * @param {string|undefined} char One character to check.
+ * @returns {boolean} Whether the character is an ASCII digit.
+ * @example isDigit('7') // true
+ * @example isDigit('.') // false
+ */
+const isDigit = char => char !== undefined && char >= '0' && char <= '9'
+
+/**
+ * Checks whether a character is an English letter, uppercase or lowercase.
+ *
+ * @param {string|undefined} char One character to check.
+ * @returns {boolean} Whether the character is an ASCII letter.
+ * @example isLetter('b') // true
+ * @example isLetter('7') // false
+ */
+const isLetter = char =>
+  char !== undefined && (
+    (char >= 'a' && char <= 'z') ||
+    (char >= 'A' && char <= 'Z')
+  )
+
+/**
+ * Checks for a letter, digit, or hyphen: the characters allowed inside
+ * prerelease and build names such as beta-1.
+ *
+ * @param {string|undefined} char One character to check.
+ * @returns {boolean} Whether the character can be part of an identifier.
+ * @example isIdentifierCharacter('-') // true
+ * @example isIdentifierCharacter('.') // false; dots separate identifiers
+ */
+const isIdentifierCharacter = char => isDigit(char) || isLetter(char) || char === '-'
+
+/**
+ * Checks whether a version component can begin here: with a digit or
+ * a wildcard such as x, X, or *.
+ *
+ * @param {string|undefined} char One character to check.
+ * @returns {boolean} Whether a number or wildcard can start with this character.
+ * @example isVersionStart('x') // true
+ * @example isVersionStart('v') // false; v belongs to the prefix
+ */
+const isVersionStart = char =>
+  isDigit(char) ||
+  char === 'x' ||
+  char === 'X' ||
+  char === '*'
+
+/**
+ * Finds the end of a row of digits, but returns no more than limit digits.
+ * Remembers the last two rows so looking at them again does not reread them.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position of the first character to check.
+ * @param {number} limit The most digit characters the returned match can include.
+ * @param {DigitRunCache} digitRuns Shared cache of digit-run positions, updated in place.
+ * @returns {number} The position after the matched digits, or start if none match.
+ * @example findDigitsEndIndex('123abc', 0, 10, digitRuns) // 3, pointing at a
+ * @example findDigitsEndIndex('123abc', 0, 2, digitRuns) // 2, pointing at the unread 3
+ */
+const findDigitsEndIndex = (range, start, limit, digitRuns) => {
+  if (!isDigit(range[start])) {
+    return start
+  }
+  if (start >= digitRuns.start && start < digitRuns.end) {
+    return Math.min(start + limit, digitRuns.end)
+  }
+  if (start >= digitRuns.previousStart && start < digitRuns.previousEnd) {
+    return Math.min(start + limit, digitRuns.previousEnd)
+  }
+  let end = start + 1
+  while (isDigit(range[end])) {
+    end++
+  }
+  // A failed full version can rewind from its second run to its first.
+  digitRuns.previousStart = digitRuns.start
+  digitRuns.previousEnd = digitRuns.end
+  digitRuns.start = start
+  digitRuns.end = end
+  return Math.min(start + limit, end)
+}
+
+/**
+ * Reads a number using the old regex's length and leading-zero rules.
+ * Strict mode reads just the first zero in 012; loose mode can read all three.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the number should begin.
+ * @param {boolean} loose Whether to allow leading zeros.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the matched digits, not their numeric value.
+ * @example findVersionNumberEndIndex('012', 0, false, digitRuns) // 1
+ * @example findVersionNumberEndIndex('012', 0, true, digitRuns) // 3
+ */
+const findVersionNumberEndIndex = (range, start, loose, digitRuns) => {
+  if (!loose && range[start] === '0') {
+    return start + 1
+  }
+  // Strict syntax allows an initial nonzero digit plus MAX_LENGTH digits.
+  return findDigitsEndIndex(range, start, loose ? MAX_LENGTH : MAX_LENGTH + 1, digitRuns)
+}
+
+/**
+ * Reads one piece of a prerelease name, such as beta or 1 in beta.1.
+ * Tries the letter-or-hyphen form first, then the number-only form.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the identifier should begin.
+ * @param {boolean} loose Whether numeric identifiers may have leading zeros.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the identifier, or start if none matches.
+ * @example findPrereleaseIdentifierEndIndex('beta.1', 0, false, digitRuns) // 4, at the dot
+ * @example findPrereleaseIdentifierEndIndex('001beta', 0, false, digitRuns) // 7
+ */
+const findPrereleaseIdentifierEndIndex = (range, start, loose, digitRuns) => {
+  const digitsEnd = findDigitsEndIndex(range, start, MAX_LENGTH, digitRuns)
+  // The legacy regex tries a nonnumeric identifier before a numeric one.
+  if (isLetter(range[digitsEnd]) || range[digitsEnd] === '-') {
+    let end = digitsEnd + 1
+    const limit = end + MAX_SAFE_BUILD_LENGTH
+    while (end < limit && isIdentifierCharacter(range[end])) {
+      end++
+    }
+    return end
+  }
+  return findVersionNumberEndIndex(range, start, loose, digitRuns)
+}
+
+/**
+ * Reads a prerelease suffix such as -beta.1, one dot-separated piece at a time.
+ * Loose mode also allows the name without its opening hyphen.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the suffix should begin, including -.
+ * @param {boolean} loose Whether the opening hyphen is optional and zeros allowed.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the matched suffix, or start if absent.
+ * @example findPrereleaseEndIndex('-beta.1+sha', 0, false, digitRuns) // 7, at the plus
+ * @example findPrereleaseEndIndex('beta', 0, false, digitRuns) // 0; no opening hyphen
+ */
+const findPrereleaseEndIndex = (range, start, loose, digitRuns) => {
+  const hyphen = range[start] === '-'
+  if (!loose && !hyphen) {
+    return start
+  }
+  const identifierStart = start + (hyphen ? 1 : 0)
+  let end = findPrereleaseIdentifierEndIndex(range, identifierStart, loose, digitRuns)
+  if (end === identifierStart) {
+    if (!loose || !hyphen) {
+      return start
+    }
+    // In loose syntax, a lone hyphen can itself be the identifier.
+    end = findPrereleaseIdentifierEndIndex(range, start, loose, digitRuns)
+  }
+  while (range[end] === '.') {
+    const next = findPrereleaseIdentifierEndIndex(range, end + 1, loose, digitRuns)
+    if (next === end + 1) {
+      break
+    }
+    end = next
+  }
+  return end
+}
+
+/**
+ * Reads one build-name piece, such as sha or 123 in +sha.123.
+ * Stops at a disallowed character or the old regex's length limit.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the identifier should begin.
+ * @returns {number} The position after the identifier, or start if none matches.
+ * @example findBuildIdentifierEndIndex('sha.123', 0) // 3, at the dot
+ * @example findBuildIdentifierEndIndex('001', 0) // 3; leading zeros are allowed
+ */
+const findBuildIdentifierEndIndex = (range, start) => {
+  let end = start
+  while (end - start < MAX_SAFE_BUILD_LENGTH && isIdentifierCharacter(range[end])) {
+    end++
+  }
+  return end
+}
+
+/**
+ * Reads optional build metadata such as +sha.123.
+ * Leaves the position unchanged if there is no plus sign followed by a name.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the opening + should be.
+ * @returns {number} The position after the matched metadata, or start if absent.
+ * @example findBuildEndIndex('+sha.123 <2', 0) // 8, at the space
+ * @example findBuildEndIndex('+', 0) // 0; a plus sign alone is not a match
+ */
+const findBuildEndIndex = (range, start) => {
+  if (range[start] !== '+') {
+    return start
+  }
+  let end = findBuildIdentifierEndIndex(range, start + 1)
+  if (end === start + 1) {
+    return start
+  }
+  while (range[end] === '.') {
+    const next = findBuildIdentifierEndIndex(range, end + 1)
+    if (next === end + 1) {
+      break
+    }
+    end = next
+  }
+  return end
+}
+
+/**
+ * Reads three numbers separated by dots, then any prerelease and build suffixes.
+ * Uses loose rules, so forms such as 01.02.03beta can match here.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position of the first number, after any prefix.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the version match, or start if none matches.
+ * @example findLooseFullVersionEndIndex('1.2.3-beta+sha <2', 0, digitRuns) // 14
+ * @example findLooseFullVersionEndIndex('1.2', 0, digitRuns) // 0; needs three numbers
+ */
+const findLooseFullVersionEndIndex = (range, start, digitRuns) => {
+  let end = start
+  for (let component = 0; component < 3; component++) {
+    const next = findVersionNumberEndIndex(range, end, true, digitRuns)
+    if (next === end) {
+      return start
+    }
+    end = next
+    if (component < 2) {
+      if (range[end] !== '.') {
+        return start
+      }
+      end++
+    }
+  }
+  const prereleaseEnd = findPrereleaseEndIndex(range, end, true, digitRuns)
+  return findBuildEndIndex(range, prereleaseEnd)
+}
+
+/**
+ * Reads one component of a partial or wildcard version, such as 2 or x in 2.x.
+ * Numbers use strict leading-zero rules; wildcards take up one character.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position where the component should begin.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the component, or start if none matches.
+ * @example findPartialVersionComponentEndIndex('2.x', 0, digitRuns) // 1, at the dot
+ * @example findPartialVersionComponentEndIndex('2.x', 2, digitRuns) // 3, after x
+ */
+const findPartialVersionComponentEndIndex = (range, start, digitRuns) => {
+  if (isDigit(range[start])) {
+    return findVersionNumberEndIndex(range, start, false, digitRuns)
+  }
+  return isVersionStart(range[start]) ? start + 1 : start
+}
+
+/**
+ * Reads up to three components, allowing forms such as 1, 1.2, or 1.x.
+ * After the third component, also reads any strict prerelease and build suffixes.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position of a number or wildcard, after any prefix.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position after the matched version text.
+ * @example findPartialVersionEndIndex('1.x <2', 0, digitRuns) // 3, at the space
+ * @example findPartialVersionEndIndex('1.', 0, digitRuns) // 1; the trailing dot is unread
+ */
+const findPartialVersionEndIndex = (range, start, digitRuns) => {
+  let end = findPartialVersionComponentEndIndex(range, start, digitRuns)
+  for (let component = 0; component < 2; component++) {
+    if (range[end] !== '.') {
+      return end
+    }
+    const next = findPartialVersionComponentEndIndex(range, end + 1, digitRuns)
+    if (next === end + 1) {
+      return end
+    }
+    end = next
+  }
+  const prereleaseEnd = findPrereleaseEndIndex(range, end, false, digitRuns)
+  return findBuildEndIndex(range, prereleaseEnd)
+}
+
+/**
+ * Finds where a version match ends, without deciding whether the range is valid.
+ * Tries a loose full version first, then a partial or wildcard version, just
+ * like the old regex's LOOSEPLAIN and XRANGEPLAIN alternatives.
+ *
+ * @param {string} range The text to read; it is not changed.
+ * @param {number} start The position of a number or wildcard, after any prefix.
+ * @param {DigitRunCache} digitRuns Shared digit-run cache, updated as needed.
+ * @returns {number} The position where scanning the next candidate can resume.
+ * @example findVersionEndIndex('1.2.3 <2', 0, digitRuns) // 5, at the space
+ * @example findVersionEndIndex('1.x <2', 0, digitRuns) // 3, at the space
+ */
+const findVersionEndIndex = (range, start, digitRuns) => {
+  const fullVersionEnd = findLooseFullVersionEndIndex(range, start, digitRuns)
+  return fullVersionEnd !== start
+    ? fullVersionEnd
+    : findPartialVersionEndIndex(range, start, digitRuns)
+}
+
+/**
+ * Finds the one whitespace character the old replacement would remove.
+ * Keeps leading whitespace, skips an optional operator, and checks immediately
+ * after it. Returns -1 if there is nothing to remove.
+ *
+ * @param {string} range The text containing a candidate already found by the caller.
+ * @param {number} matchStart The candidate's position, including leading whitespace.
+ * @returns {number} The position of the removable whitespace, or -1 if absent.
+ * @example findRemovableWhitespaceIndex(' > 1', 0) // 2; keep the space at position 0
+ * @example findRemovableWhitespaceIndex('>1', 0) // -1
+ */
+const findRemovableWhitespaceIndex = (range, matchStart) => {
+  let position = matchStart
+  if (isWhitespace(range[position])) {
+    position++
+  }
+  if (range[position] === '<' || range[position] === '>') {
+    position++
+  }
+  if (range[position] === '=') {
+    position++
+  }
+  return isWhitespace(range[position]) ? position : -1
+}
+
+/**
+ * Joins an operator to its version, turning > 1.2.3 into >1.2.3.
+ * Copies everything else according to the old regex's matching rules.
+ * Moves forward through prefixes and whole versions to avoid repeatedly
+ * searching the same characters on long inputs.
+ *
+ * @param {string} range The range text to process; the original string is unchanged.
+ * @returns {string} The range with matched operator whitespace removed.
+ * @example trimComparatorWhitespace('> 1.2.3 < 2') // '>1.2.3 <2'
+ * @example trimComparatorWhitespace('> invalid') // '> invalid'
+ */
+const trimComparatorWhitespace = range => {
+  let result = ''
+  let copyFrom = 0
+  let cursor = 0
+  const digitRuns = { start: -1, end: -1, previousStart: -1, previousEnd: -1 }
+
+  while (cursor < range.length) {
+    const matchStart = cursor
+    if (range[cursor] === '<' || range[cursor] === '>') {
+      cursor++
+    } else if (!isVersionPrefix(range[cursor]) && !isVersionStart(range[cursor])) {
+      cursor++
+      continue
+    }
+
+    // Consume a v/=/whitespace run once, even when no version follows it.
+    while (cursor < range.length && isVersionPrefix(range[cursor])) {
+      cursor++
+    }
+    if (!isVersionStart(range[cursor])) {
+      continue
+    }
+
+    const whitespacePosition = findRemovableWhitespaceIndex(range, matchStart)
+    if (whitespacePosition !== -1) {
+      result += range.slice(copyFrom, whitespacePosition)
+      copyFrom = whitespacePosition + 1
+    }
+
+    // Skip the entire match, so a prerelease's trailing v cannot be
+    // reconsidered as the prefix of another version.
+    cursor = findVersionEndIndex(range, cursor, digitRuns)
+  }
+
+  return result + range.slice(copyFrom)
+}
+
+module.exports = trimComparatorWhitespace
 
 
 /***/ }),
@@ -46514,9 +46989,8 @@ module.exports = function getPolyfill() {
 /******/ }
 /******/ 
 /************************************************************************/
-/******/ /* webpack/runtime/compat */
-/******/ 
-/******/ if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = new URL('.', import.meta.url).pathname.slice(import.meta.url.match(/^file:\/\/\/\w:/) ? 1 : 0, -1) + "/";
+/******/ /* webpack/runtime/asset-relocator-loader */
+/******/ if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = decodeURIComponent(new URL('.', import.meta.url).pathname).slice(import.meta.url.match(/^file:\/\/\/\w:/) ? 1 : 0, -1) + "/";
 /******/ 
 /************************************************************************/
 var __webpack_exports__ = {};
@@ -49466,11 +49940,9 @@ function getIDToken(aud) {
  */
 
 //# sourceMappingURL=core.js.map
-// EXTERNAL MODULE: ./node_modules/@kwsites/file-exists/dist/index.js
-var dist = __nccwpck_require__(7117);
 ;// CONCATENATED MODULE: ./node_modules/@simple-git/args-pathspec/dist/index.mjs
 const t = /* @__PURE__ */ new WeakMap();
-function c(...n) {
+function dist_c(...n) {
   const e = new String(n);
   return t.set(e, n), e;
 }
@@ -49483,6 +49955,10 @@ function dist_o(n) {
 
 //# sourceMappingURL=index.mjs.map
 
+// EXTERNAL MODULE: ./node_modules/@kwsites/file-exists/dist/index.js
+var dist = __nccwpck_require__(7117);
+;// CONCATENATED MODULE: external "node:child_process"
+const external_node_child_process_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:child_process");
 // EXTERNAL MODULE: ./node_modules/debug/src/index.js
 var src = __nccwpck_require__(2830);
 // EXTERNAL MODULE: ./node_modules/@kwsites/promise-deferred/dist/index.js
@@ -49491,12 +49967,12 @@ var promise_deferred_dist = __nccwpck_require__(9997);
 const external_node_path_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:path");
 ;// CONCATENATED MODULE: ./node_modules/@simple-git/argv-parser/dist/index.mjs
 
-function* U(e, t) {
-  const n = t === "global";
+function* x(e, n) {
+  const t = n === "global";
   for (const o of e)
-    o.isGlobal === n && (yield o);
+    o.isGlobal === t && (yield o);
 }
-const k = /* @__PURE__ */ new Set([
+const P = /* @__PURE__ */ new Set([
   "--add",
   "--edit",
   "--remove-section",
@@ -49514,45 +49990,45 @@ const k = /* @__PURE__ */ new Set([
   "--get-urlmatch",
   "--list",
   "-l"
-]), P = /* @__PURE__ */ new Set([
+]), E = /* @__PURE__ */ new Set([
   "edit",
   "remove-section",
   "rename-section",
   "set",
   "unset"
-]), E = /* @__PURE__ */ new Set(["get", "get-color", "get-colorbool", "list"]);
-function F(e, t) {
-  for (const { name: o } of U(e, "task")) {
-    if (k.has(o))
-      return p(!0, t);
+]), F = /* @__PURE__ */ new Set(["get", "get-color", "get-colorbool", "list"]);
+function A(e, n) {
+  for (const { name: o } of x(e, "task")) {
+    if (P.has(o))
+      return w(!0, n);
     if (S.has(o))
-      return p(!1, t);
+      return w(!1, n);
   }
-  const n = t.at(0)?.toLowerCase();
-  return n === void 0 ? null : P.has(n) ? p(!0, t.slice(1)) : E.has(n) ? p(!1, t.slice(1)) : t.length === 1 ? p(!1, t) : p(!0, t);
+  const t = n.at(0)?.toLowerCase();
+  return t === void 0 ? null : E.has(t) ? w(!0, n.slice(1)) : F.has(t) ? w(!1, n.slice(1)) : n.length === 1 ? w(!1, n) : w(!0, n);
 }
-function p(e = !1, t = []) {
-  const n = t.at(0)?.toLowerCase();
-  return n === void 0 ? null : {
+function w(e = !1, n = []) {
+  const t = n.at(0)?.toLowerCase();
+  return t === void 0 ? null : {
     isWrite: e,
     isRead: !e,
-    key: n,
-    value: t.at(1)
+    key: t,
+    value: n.at(1)
   };
 }
-function A(e, t) {
-  return t.isWrite && t.value !== void 0 ? { key: t.key, value: t.value, scope: e } : { key: t.key, scope: e };
+function O(e, n) {
+  return n.isWrite && n.value !== void 0 ? { key: n.key, value: n.value, scope: e } : { key: n.key, scope: e };
+}
+function G(e) {
+  const n = e?.indexOf("=") || -1;
+  return !e || n < 0 ? null : {
+    key: e.slice(0, n).trim().toLowerCase(),
+    value: e.slice(n + 1)
+  };
 }
 function M(e) {
-  const t = e?.indexOf("=") || -1;
-  return !e || t < 0 ? null : {
-    key: e.slice(0, t).trim().toLowerCase(),
-    value: e.slice(t + 1)
-  };
-}
-function N(e) {
-  for (const { name: t } of U(e, "task"))
-    switch (t) {
+  for (const { name: n } of x(e, "task"))
+    switch (n) {
       case "--global":
         return "global";
       case "--system":
@@ -49567,44 +50043,44 @@ function N(e) {
     }
   return "local";
 }
-function G({ name: e }) {
+function N({ name: e }) {
   if (e === "-c" || e === "--config")
     return "inline";
   if (e === "--config-env")
     return "env";
 }
-function* O(e) {
-  for (const t of e) {
-    const n = G(t), o = n && M(t.value);
+function* $(e) {
+  for (const n of e) {
+    const t = N(n), o = t && G(n.value);
     o && (yield {
       ...o,
-      scope: n
+      scope: t
     });
   }
 }
-function L(e, t, n) {
+function D(e, n, t) {
   const o = {
     read: [],
-    write: [...O(t)]
+    write: [...$(n)]
   };
-  return e === "config" && $(
+  return e === "config" && L(
     o,
-    N(t),
-    F(t, n)
+    M(n),
+    A(n, t)
   ), o;
 }
-function $(e, t, n) {
-  if (n === null)
+function L(e, n, t) {
+  if (t === null)
     return;
-  const o = A(t, n);
-  n.isWrite ? e.write.push(o) : e.read.push(o);
+  const o = O(n, t);
+  t.isWrite ? e.write.push(o) : e.read.push(o);
 }
-const x = {
+const C = {
   short: /* @__PURE__ */ new Map([
     ["c", !0]
     //  -c <k=v>    set config key for this invocation
   ])
-}, D = {
+}, I = {
   short: new Map([
     ["C", !0],
     //  -C <path>   change working directory
@@ -49616,7 +50092,7 @@ const x = {
     // -p          paginate
     ["v", !1],
     // -v          version
-    ...x.short.entries()
+    ...C.short.entries()
   ]),
   long: /* @__PURE__ */ new Set([
     "attr-source",
@@ -49691,188 +50167,231 @@ const x = {
   push: {
     short: /* @__PURE__ */ new Map(),
     long: /* @__PURE__ */ new Set(["exec", "receive-pack"])
+  },
+  rebase: {
+    short: /* @__PURE__ */ new Map([
+      ["X", !0],
+      // -X <option>   strategy option
+      ["f", !1],
+      // -f force-rebase
+      ["i", !1],
+      // -i interactive
+      ["k", !1],
+      // -k keep-base
+      ["m", !1],
+      // -m merge
+      ["n", !1],
+      // -n no-stat
+      ["q", !1],
+      // -q quiet
+      ["r", !1],
+      // -r rebase-merges
+      ["s", !0],
+      // -s <strategy>
+      ["v", !1],
+      // -v verbose
+      ["x", !0]
+      // -x <cmd>      exec
+    ]),
+    long: /* @__PURE__ */ new Set(["exec", "onto", "strategy", "strategy-option"])
   }
 }, T = { short: /* @__PURE__ */ new Map(), long: /* @__PURE__ */ new Set() };
-function I(e) {
-  const t = R[e ?? ""] ?? T;
+function B(e) {
+  const n = R[e ?? ""] ?? T;
   return {
-    short: new Map([...x.short.entries(), ...t.short.entries()]),
-    long: t.long
+    short: new Map([...C.short.entries(), ...n.short.entries()]),
+    long: n.long
   };
 }
-function b(e, t = D) {
+function b(e, n = I) {
   if (e.startsWith("--")) {
-    const n = e.indexOf("=");
-    if (n > 2)
-      return [{ name: e.slice(0, n), value: e.slice(n + 1), needsNext: !1 }];
+    const t = e.indexOf("=");
+    if (t > 2)
+      return [{ name: e.slice(0, t), value: e.slice(t + 1), needsNext: !1 }];
     const o = e.slice(2);
-    return [{ name: e, needsNext: t.long.has(o) }];
+    return [{ name: e, needsNext: n.long.has(o) }];
   }
   if (e.length === 2) {
-    const n = e.charAt(1), o = t.short.get(n);
+    const t = e.charAt(1), o = n.short.get(t);
     return [{ name: e, needsNext: o === !0 }];
   }
-  return W(e, t.short);
+  return j(e, n.short);
 }
-function W(e, t) {
-  const n = e.slice(1).split(""), o = [];
-  for (let s = 0; s < n.length; s++) {
-    const r = n[s], l = t.get(r);
-    if (l === void 0)
+function j(e, n) {
+  const t = e.slice(1).split(""), o = [];
+  for (let a = 0; a < t.length; a++) {
+    const s = t[a], r = n.get(s);
+    if (r === void 0)
       return [{ name: e, needsNext: !1 }];
-    if (l) {
-      const a = n.slice(s + 1).join("");
-      if (a && ![...a].every((w) => t.has(w)))
-        return o.push({ name: `-${r}`, value: a, needsNext: !1 }), o;
+    if (r) {
+      const i = t.slice(a + 1).join("");
+      if (i && ![...i].every((m) => n.has(m)))
+        return o.push({ name: `-${s}`, value: i, needsNext: !1 }), o;
     }
-    o.push({ name: `-${r}`, needsNext: l });
+    o.push({ name: `-${s}`, needsNext: r });
   }
   return o;
 }
-function j(e, t = []) {
-  let n = 0;
-  for (; n < e.length; ) {
-    const o = String(e[n]);
+function W(e, n = []) {
+  let t = 0;
+  for (; t < e.length; ) {
+    const o = String(e[t]);
     if (!o.startsWith("-") || o.length < 2) break;
-    const s = b(o);
-    let r = n + 1;
-    for (const l of s) {
-      const a = {
-        name: l.name,
-        value: l.value,
+    const a = b(o);
+    let s = t + 1;
+    for (const r of a) {
+      const i = {
+        name: r.name,
+        value: r.value,
         absorbedNext: !1,
         isGlobal: !0
       };
-      l.needsNext && a.value === void 0 && r < e.length && (a.value = String(e[r]), a.absorbedNext = !0, r++), t.push(a);
+      r.needsNext && i.value === void 0 && s < e.length && (i.value = String(e[s]), i.absorbedNext = !0, s++), n.push(i);
     }
-    n = r;
+    t = s;
   }
-  return { flags: t, taskIndex: n };
+  return { flags: n, taskIndex: t };
 }
-function B(e, t, n = []) {
-  const o = I(t), s = [], r = [];
-  let l = 0;
-  for (; l < e.length; ) {
-    const a = e[l];
-    if (dist_r(a)) {
-      r.push(...dist_o(a)), l++;
+function V(e, n, t = []) {
+  const o = B(n), a = [], s = [];
+  let r = 0;
+  for (; r < e.length; ) {
+    const i = e[r];
+    if (dist_r(i)) {
+      s.push(...dist_o(i)), r++;
       continue;
     }
-    const f = String(a);
-    if (f === "--") {
-      for (let g = l + 1; g < e.length; g++) {
-        const u = e[g];
-        dist_r(u) ? r.push(...dist_o(u)) : r.push(String(u));
+    const p = String(i);
+    if (p === "--") {
+      for (let d = r + 1; d < e.length; d++) {
+        const g = e[d];
+        dist_r(g) ? s.push(...dist_o(g)) : s.push(String(g));
       }
       break;
     }
-    if (!f.startsWith("-") || f.length < 2) {
-      s.push(f), l++;
+    if (!p.startsWith("-") || p.length < 2) {
+      a.push(p), r++;
       continue;
     }
-    const w = b(f, o);
-    let d = l + 1;
-    for (const g of w) {
-      const u = {
-        name: g.name,
-        value: g.value,
+    const m = b(p, o);
+    let u = r + 1;
+    for (const d of m) {
+      const g = {
+        name: d.name,
+        value: d.value,
         absorbedNext: !1,
         isGlobal: !1
       };
-      g.needsNext && u.value === void 0 && d < e.length && !dist_r(e[d]) && (u.value = String(e[d]), u.absorbedNext = !0, d++), n.push(u);
+      d.needsNext && g.value === void 0 && u < e.length && !dist_r(e[u]) && (g.value = String(e[u]), g.absorbedNext = !0, u++), t.push(g);
     }
-    l = d;
+    r = u;
   }
-  return { flags: n, positionals: s, pathspecs: r };
+  return { flags: t, positionals: a, pathspecs: s };
 }
-function* V({
+function* q({
   write: e
 }) {
-  for (const t of e)
-    for (const n of q) {
-      const o = n(t.key);
+  for (const n of e)
+    for (const t of K) {
+      const o = t(n.key);
       o && (yield o);
     }
 }
-function dist_c(e, t, n = String(e)) {
+function f(e, n, t = String(e)) {
   const o = typeof e == "string" ? new RegExp(`\\s*${e.toLowerCase()}`) : e;
-  return function(r) {
-    if (o.test(r))
-      return {
-        category: t,
-        message: `Configuring ${n} is not permitted without enabling ${t}`
-      };
-  };
-}
-function i(e, t) {
-  const n = new RegExp(`\\s*${e.toLowerCase().replace(/\./g, "(..+)?.")}`);
-  return dist_c(n, t, e);
-}
-const q = [
-  dist_c("alias", "allowUnsafeAlias"),
-  dist_c("core.askPass", "allowUnsafeAskPass"),
-  dist_c("core.editor", "allowUnsafeEditor"),
-  dist_c("core.fsmonitor", "allowUnsafeFsMonitor"),
-  dist_c("core.gitProxy", "allowUnsafeGitProxy"),
-  dist_c("core.hooksPath", "allowUnsafeHooksPath"),
-  dist_c("core.pager", "allowUnsafePager"),
-  dist_c("core.sshCommand", "allowUnsafeSshCommand"),
-  i("credential.helper", "allowUnsafeCredentialHelper"),
-  i("diff.command", "allowUnsafeDiffExternal"),
-  dist_c("diff.external", "allowUnsafeDiffExternal"),
-  i("diff.textconv", "allowUnsafeDiffTextConv"),
-  i("filter.clean", "allowUnsafeFilter"),
-  i("filter.smudge", "allowUnsafeFilter"),
-  i("gpg.program", "allowUnsafeGpgProgram"),
-  dist_c("init.templateDir", "allowUnsafeTemplateDir"),
-  i("merge.driver", "allowUnsafeMergeDriver"),
-  i("mergetool.path", "allowUnsafeMergeDriver"),
-  i("mergetool.cmd", "allowUnsafeMergeDriver"),
-  i("protocol.allow", "allowUnsafeProtocolOverride"),
-  i("remote.receivepack", "allowUnsafePack"),
-  i("remote.uploadpack", "allowUnsafePack"),
-  dist_c("sequence.editor", "allowUnsafeEditor")
-];
-function* K(e, t) {
-  for (const n of t)
-    for (const o of H) {
-      const s = o(e, n.name);
-      s && (yield s);
-    }
-}
-function h(e, t, n, o = String(t)) {
-  const s = typeof t == "string" ? new RegExp(`\\s*${t.toLowerCase()}`) : t, r = `Use of ${e ? `${e} with option ` : ""}${o} is not permitted without enabling ${n}`;
-  return function(a, f) {
-    if ((!e || a === e) && s.test(f))
+  return function(s) {
+    if (o.test(s))
       return {
         category: n,
-        message: r
+        message: `Configuring ${t} is not permitted without enabling ${n}`
       };
   };
 }
-const H = [
-  h(
-    null,
-    /--(upload|receive)-pack/,
-    "allowUnsafePack",
-    "--upload-pack or --receive-pack"
-  ),
-  h("clone", /^-\w*u/, "allowUnsafePack"),
-  h("clone", "--u", "allowUnsafePack"),
-  h("push", "--exec", "allowUnsafePack"),
-  h(null, "--template", "allowUnsafeTemplateDir")
+function l(e, n) {
+  const t = new RegExp(`\\s*${e.toLowerCase().replace(/\./g, "(..+)?.")}`);
+  return f(t, n, e);
+}
+const K = [
+  f("alias", "allowUnsafeAlias"),
+  f("core.askPass", "allowUnsafeAskPass"),
+  f("core.editor", "allowUnsafeEditor"),
+  f("core.fsmonitor", "allowUnsafeFsMonitor"),
+  f("core.gitProxy", "allowUnsafeGitProxy"),
+  f("core.hooksPath", "allowUnsafeHooksPath"),
+  f("core.pager", "allowUnsafePager"),
+  f("core.sshCommand", "allowUnsafeSshCommand"),
+  l("credential.helper", "allowUnsafeCredentialHelper"),
+  l("diff.command", "allowUnsafeDiffExternal"),
+  f("diff.external", "allowUnsafeDiffExternal"),
+  l("difftool.cmd", "allowUnsafeDiffExternal"),
+  l("diff.textconv", "allowUnsafeDiffTextConv"),
+  l("filter.clean", "allowUnsafeFilter"),
+  l("filter.process", "allowUnsafeFilter"),
+  l("filter.smudge", "allowUnsafeFilter"),
+  l("gpg.program", "allowUnsafeGpgProgram"),
+  f("include.path", "allowUnsafeInclude"),
+  l("includeIf", "allowUnsafeInclude"),
+  f("init.templateDir", "allowUnsafeTemplateDir"),
+  l("pager.", "allowUnsafePager"),
+  l("merge.driver", "allowUnsafeMergeDriver"),
+  l("mergetool.path", "allowUnsafeMergeDriver"),
+  l("mergetool.cmd", "allowUnsafeMergeDriver"),
+  l("protocol.allow", "allowUnsafeProtocolOverride"),
+  l("remote.receivepack", "allowUnsafePack"),
+  l("remote.uploadpack", "allowUnsafePack"),
+  f("uploadpack.packObjectsHook", "allowUnsafePack"),
+  f("sequence.editor", "allowUnsafeEditor"),
+  l("submodule.update", "allowUnsafeSubmodule"),
+  l("tar.command", "allowUnsafeCommandBinaries"),
+  l("trailer.cmd", "allowUnsafeCommandBinaries"),
+  l("trailer.command", "allowUnsafeCommandBinaries"),
+  l("url.insteadOf", "allowUnsafeUrlRewrite")
 ];
-function C(e, t, n) {
-  return [...K(e, t), ...V(n)];
+function* H(e, n) {
+  for (const t of n)
+    for (const o of X) {
+      const a = o(e, t);
+      a && (yield a);
+    }
+}
+function c(e, n, t, { name: o = String(n), globalOnly: a = !1, withValue: s = !1 } = {}) {
+  const r = typeof n == "string" ? new RegExp(`\\s*${n.toLowerCase()}`) : n, i = `Use of ${e ? `${e} with option ` : ""}${o} is not permitted without enabling ${t}`;
+  return function(m, u) {
+    if (!(e && m !== e) && !(a && !u.isGlobal) && !(s && u.value === void 0) && r.test(u.name))
+      return {
+        category: t,
+        message: i
+      };
+  };
+}
+const h = { globalOnly: !0, withValue: !0 }, X = [
+  c(null, /--(upload|receive)-pack/, "allowUnsafePack", {
+    name: "--upload-pack or --receive-pack"
+  }),
+  c("clone", /^-\w*u/, "allowUnsafePack"),
+  c("clone", "--u", "allowUnsafePack"),
+  c("push", /^--exec$/, "allowUnsafePack", { name: "--exec" }),
+  // `git` accepts unambiguous abbreviations of long options, so `--ex` and `--exe` are `--exec`
+  c("rebase", /^(-x|--ex(ec?)?)$/, "allowUnsafeExec", { name: "-x or --exec" }),
+  c(null, "--template", "allowUnsafeTemplateDir"),
+  c(null, "--exec-path", "allowUnsafeExec", h),
+  // `git` reads the configuration of whichever repository these name, so the
+  // directory alone is enough to deliver config the argv guards never see
+  c(null, "--git-dir", "allowUnsafeConfigPaths", h),
+  c(null, "--work-tree", "allowUnsafeConfigPaths", h),
+  c(null, /^-C$/, "allowUnsafeConfigPaths", { ...h, name: "-C" })
+];
+function k(e, n, t) {
+  return [...H(e, n), ...q(t)];
 }
 function Y(...e) {
-  const { flags: t, taskIndex: n } = j(e), o = n < e.length ? String(e[n]).toLowerCase() : null, s = o !== null ? e.slice(n + 1) : [], { positionals: r, pathspecs: l } = B(s, o, t), a = L(o, t, r);
+  const { flags: n, taskIndex: t } = W(e), o = t < e.length ? String(e[t]).toLowerCase() : null, a = o !== null ? e.slice(t + 1) : [], { positionals: s, pathspecs: r } = V(a, o, n), i = D(o, n, s);
   return {
     task: o,
-    flags: t.map(J),
-    paths: l,
-    config: a,
-    vulnerabilities: z(C(o, t, a))
+    flags: n.map(J),
+    paths: r,
+    config: i,
+    vulnerabilities: z(k(o, n, i))
   };
 }
 function z(e) {
@@ -49880,8 +50399,8 @@ function z(e) {
     value: e
   });
 }
-function J({ value: e, name: t }) {
-  return e !== void 0 ? { name: t, value: e } : { name: t };
+function J({ value: e, name: n }) {
+  return e !== void 0 ? { name: n, value: e } : { name: n };
 }
 const y = {
   editor: "allowUnsafeEditor",
@@ -49889,9 +50408,10 @@ const y = {
   git_config_global: "allowUnsafeConfigPaths",
   git_config_system: "allowUnsafeConfigPaths",
   git_config_count: "allowUnsafeConfigEnvCount",
+  git_config_parameters: "allowUnsafeConfigEnvCount",
   git_config: "allowUnsafeConfigPaths",
   git_editor: "allowUnsafeEditor",
-  git_exec_path: "allowUnsafeConfigPaths",
+  git_exec_path: "allowUnsafeExec",
   git_external_diff: "allowUnsafeDiffExternal",
   git_pager: "allowUnsafePager",
   git_proxy_command: "allowUnsafeGitProxy",
@@ -49901,1629 +50421,1035 @@ const y = {
   git_ssh_command: "allowUnsafeSshCommand",
   pager: "allowUnsafePager",
   prefix: "allowUnsafeConfigPaths",
-  ssh_askpass: "allowUnsafeAskPass"
+  ssh_askpass: "allowUnsafeAskPass",
+  visual: "allowUnsafeEditor"
 };
 function* Q(e) {
-  const t = parseInt(e.git_config_count ?? "0", 10);
-  for (let n = 0; n < t; n++) {
-    const o = e[`git_config_key_${n}`], s = e[`git_config_value_${n}`];
-    o !== void 0 && (yield { key: o.toLowerCase().trim(), value: s, scope: "env" });
+  const n = parseInt(e.git_config_count ?? "0", 10);
+  for (let t = 0; t < n; t++) {
+    const o = e[`git_config_key_${t}`], a = e[`git_config_value_${t}`];
+    o !== void 0 && (yield { key: o.toLowerCase().trim(), value: a, scope: "env" });
   }
 }
-function* X(e) {
-  for (const t of Object.keys(e))
-    if (_(t)) {
-      const n = y[t];
+function* Z(e) {
+  for (const n of Object.keys(e))
+    if (_(n)) {
+      const t = y[n];
       yield {
-        category: n,
-        message: `Use of "${t.toUpperCase()}" is not permitted without enabling ${n}`
+        category: t,
+        message: `Use of "${n.toUpperCase()}" is not permitted without enabling ${t}`
       };
     }
 }
 function _(e) {
   return Object.hasOwn(y, e);
 }
-function Z(e) {
-  const t = {};
-  for (const [n, o] of Object.entries(e)) {
-    const s = n.toLowerCase().trim();
-    (_(s) || s.startsWith("git")) && (t[s] = String(o));
-  }
-  return t;
-}
 function ee(e) {
-  const t = Z(e), n = {
+  const n = {};
+  for (const [t, o] of Object.entries(e)) {
+    const a = t.toLowerCase().trim();
+    (_(a) || a.startsWith("git")) && (n[a] = String(o));
+  }
+  return n;
+}
+function ne(e) {
+  const n = ee(e), t = {
     read: [],
-    write: [...Q(t)]
+    write: [...Q(n)]
   }, o = [
-    ...X(t),
-    ...C(null, [], n)
+    ...Z(n),
+    ...k(null, [], t)
   ];
   return {
-    config: n,
+    config: t,
     vulnerabilities: o
   };
 }
-function ne(e, t) {
-  return [...Y(...e).vulnerabilities, ...ee(t).vulnerabilities];
+function oe(e, n) {
+  return [...Y(...e).vulnerabilities, ...ne(n).vulnerabilities];
 }
 
 //# sourceMappingURL=index.mjs.map
 
 // EXTERNAL MODULE: external "node:events"
 var external_node_events_ = __nccwpck_require__(8474);
-;// CONCATENATED MODULE: ./node_modules/simple-git/dist/esm/index.js
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+;// CONCATENATED MODULE: ./node_modules/simple-git/dist/index.mjs
+
+
+
+
+
+
+
+
+
+class dist_O extends Error {
+  constructor(e, n) {
+    super(n), this.task = e, Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+class Ae extends dist_O {
+  constructor(e, n) {
+    super(void 0, n), this.config = e;
+  }
+}
+class dist_A extends dist_O {
+  constructor(e, n, r) {
+    super(e, r), this.task = e, this.plugin = n, Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+class at extends dist_O {
+  constructor(e, n) {
+    super(void 0, n || String(e)), this.git = e;
+  }
+}
+class xe extends dist_O {
+  constructor(e) {
+    super(void 0, e);
+  }
+}
+const dist_I = "\0", dist_W = () => {
 };
-var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-
-// src/lib/errors/git-error.ts
-var GitError;
-var init_git_error = __esm({
-  "src/lib/errors/git-error.ts"() {
-    "use strict";
-    GitError = class extends Error {
-      constructor(task, message) {
-        super(message);
-        this.task = task;
-        Object.setPrototypeOf(this, new.target.prototype);
-      }
-    };
-  }
-});
-
-// src/lib/errors/git-response-error.ts
-var GitResponseError;
-var init_git_response_error = __esm({
-  "src/lib/errors/git-response-error.ts"() {
-    "use strict";
-    init_git_error();
-    GitResponseError = class extends GitError {
-      constructor(git, message) {
-        super(void 0, message || String(git));
-        this.git = git;
-      }
-    };
-  }
-});
-
-// src/lib/errors/task-configuration-error.ts
-var TaskConfigurationError;
-var init_task_configuration_error = __esm({
-  "src/lib/errors/task-configuration-error.ts"() {
-    "use strict";
-    init_git_error();
-    TaskConfigurationError = class extends GitError {
-      constructor(message) {
-        super(void 0, message);
-      }
-    };
-  }
-});
-
-// src/lib/utils/util.ts
-
-function asFunction(source) {
-  if (typeof source !== "function") {
-    return NOOP;
-  }
-  return source;
+function Ne(t) {
+  return typeof t != "function" ? dist_W : t;
 }
-function isUserFunction(source) {
-  return typeof source === "function" && source !== NOOP;
+function $e(t) {
+  return typeof t == "function" && t !== dist_W;
 }
-function splitOn(input, char) {
-  const index = input.indexOf(char);
-  if (index <= 0) {
-    return [input, ""];
-  }
-  return [input.substr(0, index), input.substr(index + 1)];
+function Pe(t, e) {
+  const n = t.indexOf(e);
+  return n <= 0 ? [t, ""] : [t.substr(0, n), t.substr(n + 1)];
 }
-function first(input, offset = 0) {
-  return isArrayLike(input) && input.length > offset ? input[offset] : void 0;
+function Me(t, e = 0) {
+  return Dt(t) && t.length > e ? t[e] : void 0;
 }
-function last(input, offset = 0) {
-  if (isArrayLike(input) && input.length > offset) {
-    return input[input.length - 1 - offset];
-  }
+function dist_N(t, e = 0) {
+  if (Dt(t) && t.length > e)
+    return t[t.length - 1 - e];
 }
-function isArrayLike(input) {
-  return filterHasLength(input);
+function Dt(t) {
+  return Bt(t);
 }
-function toLinesWithContent(input = "", trimmed2 = true, separator = "\n") {
-  return input.split(separator).reduce((output, line) => {
-    const lineContent = trimmed2 ? line.trim() : line;
-    if (lineContent) {
-      output.push(lineContent);
-    }
-    return output;
+function dist_H(t = "", e = !0, n = `
+`) {
+  return t.split(n).reduce((r, s) => {
+    const o = e ? s.trim() : s;
+    return o && r.push(o), r;
   }, []);
 }
-function forEachLineWithContent(input, callback) {
-  return toLinesWithContent(input, true).map((line) => callback(line));
+function ut(t, e) {
+  return dist_H(t, !0).map((n) => e(n));
 }
-function folderExists(path) {
-  return (0,dist.exists)(path, dist.FOLDER);
+function Lt(t) {
+  return (0,dist.exists)(t, dist.FOLDER);
 }
-function append(target, item) {
-  if (Array.isArray(target)) {
-    if (!target.includes(item)) {
-      target.push(item);
-    }
-  } else {
-    target.add(item);
+function dist_S(t, e) {
+  return Array.isArray(t) ? t.includes(e) || t.push(e) : t.add(e), e;
+}
+function De(t, e) {
+  return Array.isArray(t) && !t.includes(e) && t.push(e), t;
+}
+function ct(t, e) {
+  if (Array.isArray(t)) {
+    const n = t.indexOf(e);
+    n >= 0 && t.splice(n, 1);
+  } else
+    t.delete(e);
+  return e;
+}
+const ft = Object.prototype.toString.call.bind(Object.prototype.toString);
+function v(t) {
+  return Array.isArray(t) ? t : [t];
+}
+function jt(t) {
+  return t.replace(/[\s-]+(.)/g, (e, n) => n.toUpperCase());
+}
+function dist_L(t) {
+  return v(t).map((e) => e instanceof String ? e : String(e));
+}
+function p(t, e = 0) {
+  if (t == null)
+    return e;
+  const n = parseInt(t, 10);
+  return Number.isNaN(n) ? e : n;
+}
+function U(t, e) {
+  const n = [];
+  for (let r = 0, s = t.length; r < s; r++)
+    n.push(e, t[r]);
+  return n;
+}
+function dist_F(t) {
+  return (Array.isArray(t) ? Buffer.concat(t) : t).toString("utf-8");
+}
+function Le(t) {
+  return t ? Buffer.isBuffer(t) ? t.length : Buffer.byteLength(t) : 0;
+}
+function je(t, e) {
+  const n = {};
+  return e.forEach((r) => {
+    t[r] !== void 0 && (n[r] = t[r]);
+  }), n;
+}
+function wt(t = 0) {
+  return new Promise((e) => setTimeout(e, t));
+}
+function bt(t) {
+  if (t !== !1)
+    return t;
+}
+function d(t, e, n) {
+  return e(t) ? t : arguments.length > 2 ? n : void 0;
+}
+const dist_K = (t) => Array.isArray(t);
+function st(t, e) {
+  const n = dist_r(t) ? "string" : typeof t;
+  return /number|string|boolean/.test(n) && (!e || !e.includes(n));
+}
+const m = (t) => typeof t == "string" || dist_r(t), Be = (t) => m(t) || Buffer.isBuffer(t), dist_G = (t) => m(t) || Array.isArray(t) && t.every(m);
+function lt(t) {
+  return !!t && ft(t) === "[object Object]";
+}
+function Ie(t) {
+  return typeof t == "function";
+}
+const Bt = (t) => t == null || "number|boolean|function".includes(typeof t) ? !1 : typeof t.length == "number";
+var dist_V = /* @__PURE__ */ ((t) => (t[t.SUCCESS = 0] = "SUCCESS", t[t.ERROR = 1] = "ERROR", t[t.NOT_FOUND = -2] = "NOT_FOUND", t[t.UNCLEAN = 128] = "UNCLEAN", t))(dist_V || {});
+class dist_z {
+  constructor(e, n) {
+    this.stdOut = e, this.stdErr = n;
   }
-  return item;
-}
-function including(target, item) {
-  if (Array.isArray(target) && !target.includes(item)) {
-    target.push(item);
+  asStrings() {
+    return new dist_z(this.stdOut.toString("utf8"), this.stdErr.toString("utf8"));
   }
-  return target;
 }
-function remove(target, item) {
-  if (Array.isArray(target)) {
-    const index = target.indexOf(item);
-    if (index >= 0) {
-      target.splice(index, 1);
-    }
-  } else {
-    target.delete(item);
+function Ue() {
+  throw new Error("LineParser:useMatches not implemented");
+}
+class dist_l {
+  constructor(e, n) {
+    this.matches = [], this.useMatches = Ue, this.parse = (r, s) => (this.resetMatches(), this._regExp.every((o, i) => this.addMatch(o, i, r(i))) ? this.useMatches(s, this.prepareMatches()) !== !1 : !1), this._regExp = Array.isArray(e) ? e : [e], n && (this.useMatches = n);
   }
-  return item;
-}
-function asArray(source) {
-  return Array.isArray(source) ? source : [source];
-}
-function asCamelCase(str) {
-  return str.replace(/[\s-]+(.)/g, (_all, chr) => {
-    return chr.toUpperCase();
-  });
-}
-function asStringArray(source) {
-  return asArray(source).map((item) => {
-    return item instanceof String ? item : String(item);
-  });
-}
-function asNumber(source, onNaN = 0) {
-  if (source == null) {
-    return onNaN;
+  resetMatches() {
+    this.matches.length = 0;
   }
-  const num = parseInt(source, 10);
-  return Number.isNaN(num) ? onNaN : num;
-}
-function prefixedArray(input, prefix) {
-  const output = [];
-  for (let i = 0, max = input.length; i < max; i++) {
-    output.push(prefix, input[i]);
+  prepareMatches() {
+    return this.matches;
   }
-  return output;
-}
-function bufferToString(input) {
-  return (Array.isArray(input) ? Buffer.concat(input) : input).toString("utf-8");
-}
-function pick(source, properties) {
-  const out = {};
-  properties.forEach((key) => {
-    if (source[key] !== void 0) {
-      out[key] = source[key];
-    }
-  });
-  return out;
-}
-function delay(duration = 0) {
-  return new Promise((done) => setTimeout(done, duration));
-}
-function orVoid(input) {
-  if (input === false) {
-    return void 0;
+  addMatch(e, n, r) {
+    const s = r && e.exec(r);
+    return s && this.pushMatch(n, s), !!s;
   }
-  return input;
-}
-var NULL, NOOP, objectToString;
-var init_util = __esm({
-  "src/lib/utils/util.ts"() {
-    "use strict";
-    init_argument_filters();
-    NULL = "\0";
-    NOOP = () => {
-    };
-    objectToString = Object.prototype.toString.call.bind(Object.prototype.toString);
+  pushMatch(e, n) {
+    this.matches.push(...n.slice(1));
   }
-});
-
-// src/lib/utils/argument-filters.ts
-
-function filterType(input, filter, def) {
-  if (filter(input)) {
-    return input;
-  }
-  return arguments.length > 2 ? def : void 0;
 }
-function filterPrimitives(input, omit) {
-  const type = dist_r(input) ? "string" : typeof input;
-  return /number|string|boolean/.test(type) && (!omit || !omit.includes(type));
-}
-function filterPlainObject(input) {
-  return !!input && objectToString(input) === "[object Object]";
-}
-function filterFunction(input) {
-  return typeof input === "function";
-}
-var filterArray, filterNumber, filterString, filterStringOrStringArray, filterHasLength;
-var init_argument_filters = __esm({
-  "src/lib/utils/argument-filters.ts"() {
-    "use strict";
-    init_util();
-    filterArray = (input) => {
-      return Array.isArray(input);
-    };
-    filterNumber = (input) => {
-      return typeof input === "number";
-    };
-    filterString = (input) => {
-      return typeof input === "string" || dist_r(input);
-    };
-    filterStringOrStringArray = (input) => {
-      return filterString(input) || Array.isArray(input) && input.every(filterString);
-    };
-    filterHasLength = (input) => {
-      if (input == null || "number|boolean|function".includes(typeof input)) {
-        return false;
-      }
-      return typeof input.length === "number";
-    };
+class dist_x extends dist_l {
+  addMatch(e, n, r) {
+    return /^remote:\s/.test(String(r)) && super.addMatch(e, n, r);
   }
-});
-
-// src/lib/utils/exit-codes.ts
-var ExitCodes;
-var init_exit_codes = __esm({
-  "src/lib/utils/exit-codes.ts"() {
-    "use strict";
-    ExitCodes = /* @__PURE__ */ ((ExitCodes2) => {
-      ExitCodes2[ExitCodes2["SUCCESS"] = 0] = "SUCCESS";
-      ExitCodes2[ExitCodes2["ERROR"] = 1] = "ERROR";
-      ExitCodes2[ExitCodes2["NOT_FOUND"] = -2] = "NOT_FOUND";
-      ExitCodes2[ExitCodes2["UNCLEAN"] = 128] = "UNCLEAN";
-      return ExitCodes2;
-    })(ExitCodes || {});
+  pushMatch(e, n) {
+    (e > 0 || n.length > 1) && super.pushMatch(e, n);
   }
-});
-
-// src/lib/utils/git-output-streams.ts
-var GitOutputStreams;
-var init_git_output_streams = __esm({
-  "src/lib/utils/git-output-streams.ts"() {
-    "use strict";
-    GitOutputStreams = class _GitOutputStreams {
-      constructor(stdOut, stdErr) {
-        this.stdOut = stdOut;
-        this.stdErr = stdErr;
-      }
-      asStrings() {
-        return new _GitOutputStreams(this.stdOut.toString("utf8"), this.stdErr.toString("utf8"));
-      }
-    };
-  }
-});
-
-// src/lib/utils/line-parser.ts
-function useMatchesDefault() {
-  throw new Error(`LineParser:useMatches not implemented`);
 }
-var LineParser, RemoteLineParser;
-var init_line_parser = __esm({
-  "src/lib/utils/line-parser.ts"() {
-    "use strict";
-    LineParser = class {
-      constructor(regExp, useMatches) {
-        this.matches = [];
-        this.useMatches = useMatchesDefault;
-        this.parse = (line, target) => {
-          this.resetMatches();
-          if (!this._regExp.every((reg, index) => this.addMatch(reg, index, line(index)))) {
-            return false;
-          }
-          return this.useMatches(target, this.prepareMatches()) !== false;
-        };
-        this._regExp = Array.isArray(regExp) ? regExp : [regExp];
-        if (useMatches) {
-          this.useMatches = useMatches;
-        }
-      }
-      resetMatches() {
-        this.matches.length = 0;
-      }
-      prepareMatches() {
-        return this.matches;
-      }
-      addMatch(reg, index, line) {
-        const matched = line && reg.exec(line);
-        if (matched) {
-          this.pushMatch(index, matched);
-        }
-        return !!matched;
-      }
-      pushMatch(_index, matched) {
-        this.matches.push(...matched.slice(1));
-      }
-    };
-    RemoteLineParser = class extends LineParser {
-      addMatch(reg, index, line) {
-        return /^remote:\s/.test(String(line)) && super.addMatch(reg, index, line);
-      }
-      pushMatch(index, matched) {
-        if (index > 0 || matched.length > 1) {
-          super.pushMatch(index, matched);
-        }
-      }
-    };
-  }
-});
-
-// src/lib/utils/simple-git-options.ts
-function createInstanceConfig(...options) {
-  const baseDir = process.cwd();
-  const config = Object.assign(
-    { baseDir, ...defaultOptions },
-    ...options.filter((o) => typeof o === "object" && o)
+const Fe = {
+  binary: "git",
+  maxConcurrentProcesses: 5,
+  config: [],
+  trimmed: !1
+};
+function Ge(...t) {
+  const e = process.cwd(), n = Object.assign(
+    { baseDir: e, ...Fe },
+    ...t.filter((r) => typeof r == "object" && r)
   );
-  config.baseDir = config.baseDir || baseDir;
-  config.trimmed = config.trimmed === true;
-  return config;
+  return n.baseDir = n.baseDir || e, n.trimmed = n.trimmed === !0, n;
 }
-var defaultOptions;
-var init_simple_git_options = __esm({
-  "src/lib/utils/simple-git-options.ts"() {
-    "use strict";
-    defaultOptions = {
-      binary: "git",
-      maxConcurrentProcesses: 5,
-      config: [],
-      trimmed: false
-    };
-  }
-});
-
-// src/lib/utils/task-options.ts
-
-function appendTaskOptions(options, commands = []) {
-  if (!filterPlainObject(options)) {
-    return commands;
-  }
-  return Object.keys(options).reduce((commands2, key) => {
-    const value = options[key];
-    if (dist_r(value)) {
-      commands2.push(value);
-    } else if (filterPrimitives(value, ["boolean"])) {
-      commands2.push(key + "=" + value);
-    } else if (Array.isArray(value)) {
-      for (const v of value) {
-        if (!filterPrimitives(v, ["string", "number"])) {
-          commands2.push(key + "=" + v);
-        }
-      }
-    } else {
-      commands2.push(key);
-    }
-    return commands2;
-  }, commands);
+function It(t, e = []) {
+  return lt(t) ? Object.keys(t).reduce((n, r) => {
+    const s = t[r];
+    if (dist_r(s))
+      n.push(s);
+    else if (st(s, ["boolean"]))
+      n.push(r + "=" + s);
+    else if (Array.isArray(s))
+      for (const o of s)
+        st(o, ["string", "number"]) || n.push(r + "=" + o);
+    else
+      n.push(r);
+    return n;
+  }, e) : e;
 }
-function getTrailingOptions(args, initialPrimitive = 0, objectOnly = false) {
-  const command = [];
-  for (let i = 0, max = initialPrimitive < 0 ? args.length : initialPrimitive; i < max; i++) {
-    if ("string|number".includes(typeof args[i])) {
-      command.push(String(args[i]));
-    }
-  }
-  appendTaskOptions(trailingOptionsArgument(args), command);
-  if (!objectOnly) {
-    command.push(...trailingArrayArgument(args));
-  }
-  return command;
+function dist_h(t, e = 0, n = !1) {
+  const r = [];
+  for (let s = 0, o = e < 0 ? t.length : e; s < o; s++)
+    "string|number".includes(typeof t[s]) && r.push(String(t[s]));
+  return It(ht(t), r), n || r.push(...ze(t)), r;
 }
-function trailingArrayArgument(args) {
-  const hasTrailingCallback = typeof last(args) === "function";
-  return asStringArray(filterType(last(args, hasTrailingCallback ? 1 : 0), filterArray, []));
+function ze(t) {
+  const e = typeof dist_N(t) == "function";
+  return dist_L(d(dist_N(t, e ? 1 : 0), dist_K, []));
 }
-function trailingOptionsArgument(args) {
-  const hasTrailingCallback = filterFunction(last(args));
-  return filterType(last(args, hasTrailingCallback ? 1 : 0), filterPlainObject);
+function ht(t) {
+  const e = Ie(dist_N(t));
+  return d(dist_N(t, e ? 1 : 0), lt);
 }
-function trailingFunctionArgument(args, includeNoop = true) {
-  const callback = asFunction(last(args));
-  return includeNoop || isUserFunction(callback) ? callback : void 0;
+function u(t, e = !0) {
+  const n = Ne(dist_N(t));
+  return e || $e(n) ? n : void 0;
 }
-var init_task_options = __esm({
-  "src/lib/utils/task-options.ts"() {
-    "use strict";
-    init_argument_filters();
-    init_util();
-  }
-});
-
-// src/lib/utils/task-parser.ts
-function callTaskParser(parser4, streams) {
-  return parser4(streams.stdOut, streams.stdErr);
+function Tt(t, e) {
+  return t(e.stdOut, e.stdErr);
 }
-function parseStringResponse(result, parsers12, texts, trim = true) {
-  asArray(texts).forEach((text) => {
-    for (let lines = toLinesWithContent(text, trim), i = 0, max = lines.length; i < max; i++) {
-      const line = (offset = 0) => {
-        if (i + offset >= max) {
-          return;
-        }
-        return lines[i + offset];
+function dist_E(t, e, n, r = !0) {
+  return v(n).forEach((s) => {
+    for (let o = dist_H(s, r), i = 0, a = o.length; i < a; i++) {
+      const c = (y = 0) => {
+        if (!(i + y >= a))
+          return o[i + y];
       };
-      parsers12.some(({ parse }) => parse(line, result));
+      e.some(({ parse: y }) => y(c, t));
     }
-  });
-  return result;
+  }), t;
 }
-var init_task_parser = __esm({
-  "src/lib/utils/task-parser.ts"() {
-    "use strict";
-    init_util();
+var qe = /* @__PURE__ */ ((t) => (t.BARE = "bare", t.IN_TREE = "tree", t.IS_REPO_ROOT = "root", t))(qe || {});
+const mt = ({ exitCode: t }, e, n, r) => {
+  if (t === dist_V.UNCLEAN && Ve(e))
+    return n(Buffer.from("false"));
+  r(e);
+}, Ut = (t) => t.trim() === "true";
+function We(t) {
+  switch (t) {
+    case "bare":
+      return Ke();
+    case "root":
+      return He();
   }
-});
-
-// src/lib/utils/index.ts
-var utils_exports = {};
-__export(utils_exports, {
-  ExitCodes: () => ExitCodes,
-  GitOutputStreams: () => GitOutputStreams,
-  LineParser: () => LineParser,
-  NOOP: () => NOOP,
-  NULL: () => NULL,
-  RemoteLineParser: () => RemoteLineParser,
-  append: () => append,
-  appendTaskOptions: () => appendTaskOptions,
-  asArray: () => asArray,
-  asCamelCase: () => asCamelCase,
-  asFunction: () => asFunction,
-  asNumber: () => asNumber,
-  asStringArray: () => asStringArray,
-  bufferToString: () => bufferToString,
-  callTaskParser: () => callTaskParser,
-  createInstanceConfig: () => createInstanceConfig,
-  delay: () => delay,
-  filterArray: () => filterArray,
-  filterFunction: () => filterFunction,
-  filterHasLength: () => filterHasLength,
-  filterNumber: () => filterNumber,
-  filterPlainObject: () => filterPlainObject,
-  filterPrimitives: () => filterPrimitives,
-  filterString: () => filterString,
-  filterStringOrStringArray: () => filterStringOrStringArray,
-  filterType: () => filterType,
-  first: () => first,
-  folderExists: () => folderExists,
-  forEachLineWithContent: () => forEachLineWithContent,
-  getTrailingOptions: () => getTrailingOptions,
-  including: () => including,
-  isUserFunction: () => isUserFunction,
-  last: () => last,
-  objectToString: () => objectToString,
-  orVoid: () => orVoid,
-  parseStringResponse: () => parseStringResponse,
-  pick: () => pick,
-  prefixedArray: () => prefixedArray,
-  remove: () => remove,
-  splitOn: () => splitOn,
-  toLinesWithContent: () => toLinesWithContent,
-  trailingFunctionArgument: () => trailingFunctionArgument,
-  trailingOptionsArgument: () => trailingOptionsArgument
-});
-var init_utils = __esm({
-  "src/lib/utils/index.ts"() {
-    "use strict";
-    init_argument_filters();
-    init_exit_codes();
-    init_git_output_streams();
-    init_line_parser();
-    init_simple_git_options();
-    init_task_options();
-    init_task_parser();
-    init_util();
-  }
-});
-
-// src/lib/tasks/check-is-repo.ts
-var check_is_repo_exports = {};
-__export(check_is_repo_exports, {
-  CheckRepoActions: () => CheckRepoActions,
-  checkIsBareRepoTask: () => checkIsBareRepoTask,
-  checkIsRepoRootTask: () => checkIsRepoRootTask,
-  checkIsRepoTask: () => checkIsRepoTask
-});
-function checkIsRepoTask(action) {
-  switch (action) {
-    case "bare" /* BARE */:
-      return checkIsBareRepoTask();
-    case "root" /* IS_REPO_ROOT */:
-      return checkIsRepoRootTask();
-  }
-  const commands = ["rev-parse", "--is-inside-work-tree"];
   return {
-    commands,
+    commands: ["rev-parse", "--is-inside-work-tree"],
     format: "utf-8",
-    onError,
-    parser
+    onError: mt,
+    parser: Ut
   };
 }
-function checkIsRepoRootTask() {
-  const commands = ["rev-parse", "--git-dir"];
+function He() {
   return {
-    commands,
+    commands: ["rev-parse", "--git-dir"],
     format: "utf-8",
-    onError,
-    parser(path) {
-      return /^\.(git)?$/.test(path.trim());
+    onError: mt,
+    parser(e) {
+      return /^\.(git)?$/.test(e.trim());
     }
   };
 }
-function checkIsBareRepoTask() {
-  const commands = ["rev-parse", "--is-bare-repository"];
+function Ke() {
   return {
-    commands,
+    commands: ["rev-parse", "--is-bare-repository"],
     format: "utf-8",
-    onError,
-    parser
+    onError: mt,
+    parser: Ut
   };
 }
-function isNotRepoMessage(error) {
-  return /(Not a git repository|Kein Git-Repository)/i.test(String(error));
+function Ve(t) {
+  return /(Not a git repository|Kein Git-Repository)/i.test(String(t));
 }
-var CheckRepoActions, onError, parser;
-var init_check_is_repo = __esm({
-  "src/lib/tasks/check-is-repo.ts"() {
-    "use strict";
-    init_utils();
-    CheckRepoActions = /* @__PURE__ */ ((CheckRepoActions2) => {
-      CheckRepoActions2["BARE"] = "bare";
-      CheckRepoActions2["IN_TREE"] = "tree";
-      CheckRepoActions2["IS_REPO_ROOT"] = "root";
-      return CheckRepoActions2;
-    })(CheckRepoActions || {});
-    onError = ({ exitCode }, error, done, fail) => {
-      if (exitCode === 128 /* UNCLEAN */ && isNotRepoMessage(error)) {
-        return done(Buffer.from("false"));
-      }
-      fail(error);
-    };
-    parser = (text) => {
-      return text.trim() === "true";
-    };
+class Xe {
+  constructor(e) {
+    this.paths = [], this.files = [], this.folders = [], this.dryRun = e;
   }
-});
-
-// src/lib/responses/CleanSummary.ts
-function cleanSummaryParser(dryRun, text) {
-  const summary = new CleanResponse(dryRun);
-  const regexp = dryRun ? dryRunRemovalRegexp : removalRegexp;
-  toLinesWithContent(text).forEach((line) => {
-    const removed = line.replace(regexp, "");
-    summary.paths.push(removed);
-    (isFolderRegexp.test(removed) ? summary.folders : summary.files).push(removed);
-  });
-  return summary;
 }
-var CleanResponse, removalRegexp, dryRunRemovalRegexp, isFolderRegexp;
-var init_CleanSummary = __esm({
-  "src/lib/responses/CleanSummary.ts"() {
-    "use strict";
-    init_utils();
-    CleanResponse = class {
-      constructor(dryRun) {
-        this.dryRun = dryRun;
-        this.paths = [];
-        this.files = [];
-        this.folders = [];
-      }
-    };
-    removalRegexp = /^[a-z]+\s*/i;
-    dryRunRemovalRegexp = /^[a-z]+\s+[a-z]+\s*/i;
-    isFolderRegexp = /\/$/;
-  }
-});
-
-// src/lib/tasks/task.ts
-var task_exports = {};
-__export(task_exports, {
-  EMPTY_COMMANDS: () => EMPTY_COMMANDS,
-  adhocExecTask: () => adhocExecTask,
-  configurationErrorTask: () => configurationErrorTask,
-  isBufferTask: () => isBufferTask,
-  isEmptyTask: () => isEmptyTask,
-  straightThroughBufferTask: () => straightThroughBufferTask,
-  straightThroughStringTask: () => straightThroughStringTask
-});
-function adhocExecTask(parser4) {
+const Ye = /^[a-z]+\s*/i, Qe = /^[a-z]+\s+[a-z]+\s*/i, Je = /\/$/;
+function Ze(t, e) {
+  const n = new Xe(t), r = t ? Qe : Ye;
+  return dist_H(e).forEach((s) => {
+    const o = s.replace(r, "");
+    n.paths.push(o), (Je.test(o) ? n.folders : n.files).push(o);
+  }), n;
+}
+const Ft = [];
+function tn(t) {
   return {
-    commands: EMPTY_COMMANDS,
+    commands: Ft,
     format: "empty",
-    parser: parser4
+    parser: t
   };
 }
-function configurationErrorTask(error) {
+function dist_b(t) {
   return {
-    commands: EMPTY_COMMANDS,
+    commands: Ft,
     format: "empty",
     parser() {
-      throw typeof error === "string" ? new TaskConfigurationError(error) : error;
+      throw typeof t == "string" ? new xe(t) : t;
     }
   };
 }
-function straightThroughStringTask(commands, trimmed2 = false) {
+function g(t, e = !1) {
   return {
-    commands,
+    commands: t,
     format: "utf-8",
-    parser(text) {
-      return trimmed2 ? String(text).trim() : text;
+    parser(n) {
+      return e ? String(n).trim() : n;
     }
   };
 }
-function straightThroughBufferTask(commands) {
+function Gt(t) {
   return {
-    commands,
+    commands: t,
     format: "buffer",
-    parser(buffer) {
-      return buffer;
+    parser(e) {
+      return e;
     }
   };
 }
-function isBufferTask(task) {
-  return task.format === "buffer";
+function en(t) {
+  return t.format === "buffer";
 }
-function isEmptyTask(task) {
-  return task.format === "empty" || !task.commands.length;
+function kt(t) {
+  return t.format === "empty" || !t.commands.length;
 }
-var EMPTY_COMMANDS;
-var init_task = __esm({
-  "src/lib/tasks/task.ts"() {
-    "use strict";
-    init_task_configuration_error();
-    EMPTY_COMMANDS = [];
-  }
-});
-
-// src/lib/tasks/clean.ts
-var clean_exports = {};
-__export(clean_exports, {
-  CONFIG_ERROR_INTERACTIVE_MODE: () => CONFIG_ERROR_INTERACTIVE_MODE,
-  CONFIG_ERROR_MODE_REQUIRED: () => CONFIG_ERROR_MODE_REQUIRED,
-  CONFIG_ERROR_UNKNOWN_OPTION: () => CONFIG_ERROR_UNKNOWN_OPTION,
-  CleanOptions: () => CleanOptions,
-  cleanTask: () => cleanTask,
-  cleanWithOptionsTask: () => cleanWithOptionsTask,
-  isCleanOptionsArray: () => isCleanOptionsArray
-});
-function cleanWithOptionsTask(mode, customArgs) {
-  const { cleanMode, options, valid } = getCleanOptions(mode);
-  if (!cleanMode) {
-    return configurationErrorTask(CONFIG_ERROR_MODE_REQUIRED);
-  }
-  if (!valid.options) {
-    return configurationErrorTask(CONFIG_ERROR_UNKNOWN_OPTION + JSON.stringify(mode));
-  }
-  options.push(...customArgs);
-  if (options.some(isInteractiveMode)) {
-    return configurationErrorTask(CONFIG_ERROR_INTERACTIVE_MODE);
-  }
-  return cleanTask(cleanMode, options);
+const nn = "Git clean interactive mode is not supported", rn = 'Git clean mode parameter ("n" or "f") is required', sn = "Git clean unknown option found in: ";
+var zt = /* @__PURE__ */ ((t) => (t.DRY_RUN = "n", t.FORCE = "f", t.IGNORED_INCLUDED = "x", t.IGNORED_ONLY = "X", t.EXCLUDING = "e", t.QUIET = "q", t.RECURSIVE = "d", t))(zt || {});
+const qt = /* @__PURE__ */ new Set([
+  "i",
+  ...dist_L(Object.values(zt))
+]);
+function on(t, e) {
+  const { cleanMode: n, options: r, valid: s } = cn(t);
+  return n ? s.options ? (r.push(...e), r.some(hn) ? dist_b(nn) : an(n, r)) : dist_b(sn + JSON.stringify(t)) : dist_b(rn);
 }
-function cleanTask(mode, customArgs) {
-  const commands = ["clean", `-${mode}`, ...customArgs];
+function an(t, e) {
   return {
-    commands,
+    commands: ["clean", `-${t}`, ...e],
     format: "utf-8",
-    parser(text) {
-      return cleanSummaryParser(mode === "n" /* DRY_RUN */, text);
+    parser(r) {
+      return Ze(t === "n", r);
     }
   };
 }
-function isCleanOptionsArray(input) {
-  return Array.isArray(input) && input.every((test) => CleanOptionValues.has(test));
+function un(t) {
+  return Array.isArray(t) && t.every((e) => qt.has(e));
 }
-function getCleanOptions(input) {
-  let cleanMode;
-  let options = [];
-  let valid = { cleanMode: false, options: true };
-  input.replace(/[^a-z]i/g, "").split("").forEach((char) => {
-    if (isCleanMode(char)) {
-      cleanMode = char;
-      valid.cleanMode = true;
-    } else {
-      valid.options = valid.options && isKnownOption(options[options.length] = `-${char}`);
-    }
-  });
-  return {
-    cleanMode,
-    options,
-    valid
+function cn(t) {
+  let e, n = [], r = { cleanMode: !1, options: !0 };
+  return t.replace(/[^a-z]i/g, "").split("").forEach((s) => {
+    fn(s) ? (e = s, r.cleanMode = !0) : r.options = r.options && ln(n[n.length] = `-${s}`);
+  }), {
+    cleanMode: e,
+    options: n,
+    valid: r
   };
 }
-function isCleanMode(cleanMode) {
-  return cleanMode === "f" /* FORCE */ || cleanMode === "n" /* DRY_RUN */;
+function fn(t) {
+  return t === "f" || t === "n";
 }
-function isKnownOption(option) {
-  return /^-[a-z]$/i.test(option) && CleanOptionValues.has(option.charAt(1));
+function ln(t) {
+  return /^-[a-z]$/i.test(t) && qt.has(t.charAt(1));
 }
-function isInteractiveMode(option) {
-  if (/^-[^\-]/.test(option)) {
-    return option.indexOf("i") > 0;
+function hn(t) {
+  return /^-[^\-]/.test(t) ? t.indexOf("i") > 0 : t === "--interactive";
+}
+class mn {
+  constructor() {
+    this.files = [], this.values = /* @__PURE__ */ Object.create(null);
   }
-  return option === "--interactive";
-}
-var CONFIG_ERROR_INTERACTIVE_MODE, CONFIG_ERROR_MODE_REQUIRED, CONFIG_ERROR_UNKNOWN_OPTION, CleanOptions, CleanOptionValues;
-var init_clean = __esm({
-  "src/lib/tasks/clean.ts"() {
-    "use strict";
-    init_CleanSummary();
-    init_utils();
-    init_task();
-    CONFIG_ERROR_INTERACTIVE_MODE = "Git clean interactive mode is not supported";
-    CONFIG_ERROR_MODE_REQUIRED = 'Git clean mode parameter ("n" or "f") is required';
-    CONFIG_ERROR_UNKNOWN_OPTION = "Git clean unknown option found in: ";
-    CleanOptions = /* @__PURE__ */ ((CleanOptions2) => {
-      CleanOptions2["DRY_RUN"] = "n";
-      CleanOptions2["FORCE"] = "f";
-      CleanOptions2["IGNORED_INCLUDED"] = "x";
-      CleanOptions2["IGNORED_ONLY"] = "X";
-      CleanOptions2["EXCLUDING"] = "e";
-      CleanOptions2["QUIET"] = "q";
-      CleanOptions2["RECURSIVE"] = "d";
-      return CleanOptions2;
-    })(CleanOptions || {});
-    CleanOptionValues = /* @__PURE__ */ new Set([
-      "i",
-      ...asStringArray(Object.values(CleanOptions))
-    ]);
+  get all() {
+    return this._all || (this._all = this.files.reduce((e, n) => Object.assign(e, this.values[n]), {})), this._all;
   }
-});
-
-// src/lib/responses/ConfigList.ts
-function configListParser(text) {
-  const config = new ConfigList();
-  for (const item of configParser(text)) {
-    config.addValue(item.file, String(item.key), item.value);
-  }
-  return config;
-}
-function configGetParser(text, key) {
-  let value = null;
-  const values = [];
-  const scopes = /* @__PURE__ */ new Map();
-  for (const item of configParser(text, key)) {
-    if (item.key !== key) {
-      continue;
+  addFile(e) {
+    if (!(e in this.values)) {
+      const n = dist_N(this.files);
+      this.values[e] = n ? Object.create(this.values[n]) : {}, this.files.push(e);
     }
-    values.push(value = item.value);
-    if (!scopes.has(item.file)) {
-      scopes.set(item.file, []);
-    }
-    scopes.get(item.file).push(value);
+    return this.values[e];
   }
+  addValue(e, n, r) {
+    const s = this.addFile(e);
+    Object.hasOwn(s, n) ? Array.isArray(s[n]) ? s[n].push(r) : s[n] = [s[n], r] : s[n] = r, this._all = void 0;
+  }
+}
+function pn(t) {
+  const e = new mn();
+  for (const n of Wt(t))
+    e.addValue(n.file, String(n.key), n.value);
+  return e;
+}
+function dn(t, e) {
+  let n = null;
+  const r = [], s = /* @__PURE__ */ new Map();
+  for (const o of Wt(t, e))
+    o.key === e && (r.push(n = o.value), s.has(o.file) || s.set(o.file, []), s.get(o.file).push(n));
   return {
-    key,
-    paths: Array.from(scopes.keys()),
-    scopes,
-    value,
-    values
+    key: e,
+    paths: Array.from(s.keys()),
+    scopes: s,
+    value: n,
+    values: r
   };
 }
-function configFilePath(filePath) {
-  return filePath.replace(/^(file):/, "");
+function gn(t) {
+  return t.replace(/^(file):/, "");
 }
-function* configParser(text, requestedKey = null) {
-  const lines = text.split("\0");
-  for (let i = 0, max = lines.length - 1; i < max; ) {
-    const file = configFilePath(lines[i++]);
-    let value = lines[i++];
-    let key = requestedKey;
-    if (value.includes("\n")) {
-      const line = splitOn(value, "\n");
-      key = line[0];
-      value = line[1];
+function* Wt(t, e = null) {
+  const n = t.split("\0");
+  for (let r = 0, s = n.length - 1; r < s; ) {
+    const o = gn(n[r++]);
+    let i = n[r++], a = e;
+    if (i.includes(`
+`)) {
+      const c = Pe(i, `
+`);
+      a = c[0], i = c[1];
     }
-    yield { file, key, value };
+    yield { file: o, key: a, value: i };
   }
 }
-var ConfigList;
-var init_ConfigList = __esm({
-  "src/lib/responses/ConfigList.ts"() {
-    "use strict";
-    init_utils();
-    ConfigList = class {
-      constructor() {
-        this.files = [];
-        this.values = /* @__PURE__ */ Object.create(null);
-      }
-      get all() {
-        if (!this._all) {
-          this._all = this.files.reduce((all, file) => {
-            return Object.assign(all, this.values[file]);
-          }, {});
-        }
-        return this._all;
-      }
-      addFile(file) {
-        if (!(file in this.values)) {
-          const latest = last(this.files);
-          this.values[file] = latest ? Object.create(this.values[latest]) : {};
-          this.files.push(file);
-        }
-        return this.values[file];
-      }
-      addValue(file, key, value) {
-        const values = this.addFile(file);
-        if (!Object.hasOwn(values, key)) {
-          values[key] = value;
-        } else if (Array.isArray(values[key])) {
-          values[key].push(value);
-        } else {
-          values[key] = [values[key], value];
-        }
-        this._all = void 0;
-      }
-    };
-  }
-});
-
-// src/lib/tasks/config.ts
-function asConfigScope(scope, fallback) {
-  if (typeof scope === "string" && Object.hasOwn(GitConfigScope, scope)) {
-    return scope;
-  }
-  return fallback;
+var Ht = /* @__PURE__ */ ((t) => (t.system = "system", t.global = "global", t.local = "local", t.worktree = "worktree", t))(Ht || {});
+function dist_Y(t, e) {
+  return typeof t == "string" && Object.hasOwn(Ht, t) ? t : e;
 }
-function addConfigTask(key, value, append2, scope) {
-  const commands = ["config", `--${scope}`];
-  if (append2) {
-    commands.push("--add");
-  }
-  commands.push(key, value);
-  return {
-    commands,
+function yn(t, e, n, r) {
+  const s = ["config", `--${r}`];
+  return n && s.push("--add"), s.push(t, e), {
+    commands: s,
     format: "utf-8",
-    parser(text) {
-      return text;
+    parser(o) {
+      return o;
     }
   };
 }
-function getConfigTask(key, scope) {
-  const commands = ["config", "--null", "--show-origin", "--get-all", key];
-  if (scope) {
-    commands.splice(1, 0, `--${scope}`);
-  }
-  return {
-    commands,
+function wn(t, e) {
+  const n = ["config", "--null", "--show-origin", "--get-all", t];
+  return e && n.splice(1, 0, `--${e}`), {
+    commands: n,
     format: "utf-8",
-    parser(text) {
-      return configGetParser(text, key);
+    parser(r) {
+      return dn(r, t);
     }
   };
 }
-function listConfigTask(scope) {
-  const commands = ["config", "--list", "--show-origin", "--null"];
-  if (scope) {
-    commands.push(`--${scope}`);
-  }
-  return {
-    commands,
+function bn(t) {
+  const e = ["config", "--list", "--show-origin", "--null"];
+  return t && e.push(`--${t}`), {
+    commands: e,
     format: "utf-8",
-    parser(text) {
-      return configListParser(text);
+    parser(n) {
+      return pn(n);
     }
   };
 }
-function config_default() {
+function Tn() {
   return {
-    addConfig(key, value, ...rest) {
+    addConfig(t, e, ...n) {
       return this._runTask(
-        addConfigTask(
-          key,
-          value,
-          rest[0] === true,
-          asConfigScope(rest[1], "local" /* local */)
+        yn(
+          t,
+          e,
+          n[0] === !0,
+          dist_Y(
+            n[1],
+            "local"
+            /* local */
+          )
         ),
-        trailingFunctionArgument(arguments)
+        u(arguments)
       );
     },
-    getConfig(key, scope) {
+    getConfig(t, e) {
       return this._runTask(
-        getConfigTask(key, asConfigScope(scope, void 0)),
-        trailingFunctionArgument(arguments)
+        wn(t, dist_Y(e, void 0)),
+        u(arguments)
       );
     },
-    listConfig(...rest) {
+    listConfig(...t) {
       return this._runTask(
-        listConfigTask(asConfigScope(rest[0], void 0)),
-        trailingFunctionArgument(arguments)
+        bn(dist_Y(t[0], void 0)),
+        u(arguments)
       );
     }
   };
 }
-var GitConfigScope;
-var init_config = __esm({
-  "src/lib/tasks/config.ts"() {
-    "use strict";
-    init_ConfigList();
-    init_utils();
-    GitConfigScope = /* @__PURE__ */ ((GitConfigScope2) => {
-      GitConfigScope2["system"] = "system";
-      GitConfigScope2["global"] = "global";
-      GitConfigScope2["local"] = "local";
-      GitConfigScope2["worktree"] = "worktree";
-      return GitConfigScope2;
-    })(GitConfigScope || {});
-  }
-});
-
-// src/lib/tasks/diff-name-status.ts
-function isDiffNameStatus(input) {
-  return diffNameStatus.has(input);
+var Kt = /* @__PURE__ */ ((t) => (t.ADDED = "A", t.COPIED = "C", t.DELETED = "D", t.MODIFIED = "M", t.RENAMED = "R", t.CHANGED = "T", t.UNMERGED = "U", t.UNKNOWN = "X", t.BROKEN = "B", t))(Kt || {});
+const kn = new Set(Object.values(Kt));
+function _n(t) {
+  return kn.has(t);
 }
-var DiffNameStatus, diffNameStatus;
-var init_diff_name_status = __esm({
-  "src/lib/tasks/diff-name-status.ts"() {
-    "use strict";
-    DiffNameStatus = /* @__PURE__ */ ((DiffNameStatus2) => {
-      DiffNameStatus2["ADDED"] = "A";
-      DiffNameStatus2["COPIED"] = "C";
-      DiffNameStatus2["DELETED"] = "D";
-      DiffNameStatus2["MODIFIED"] = "M";
-      DiffNameStatus2["RENAMED"] = "R";
-      DiffNameStatus2["CHANGED"] = "T";
-      DiffNameStatus2["UNMERGED"] = "U";
-      DiffNameStatus2["UNKNOWN"] = "X";
-      DiffNameStatus2["BROKEN"] = "B";
-      return DiffNameStatus2;
-    })(DiffNameStatus || {});
-    diffNameStatus = new Set(Object.values(DiffNameStatus));
+var _t;
+const vn = ["-h"], dist_j = /* @__PURE__ */ Symbol("grepQuery");
+class En {
+  constructor() {
+    this[_t] = [];
   }
-});
-
-// src/lib/tasks/grep.ts
-function grepQueryBuilder(...params) {
-  return new GrepQuery().param(...params);
+  *[(_t = dist_j, Symbol.iterator)]() {
+    for (const e of this[dist_j])
+      yield e;
+  }
+  and(...e) {
+    return e.length && this[dist_j].push("--and", "(", ...U(e, "-e"), ")"), this;
+  }
+  param(...e) {
+    return this[dist_j].push(...U(e, "-e")), this;
+  }
 }
-function parseGrep(grep) {
-  const paths = /* @__PURE__ */ new Set();
-  const results = {};
-  forEachLineWithContent(grep, (input) => {
-    const [path, line, preview] = input.split(NULL);
-    paths.add(path);
-    (results[path] = results[path] || []).push({
-      line: asNumber(line),
-      path,
-      preview
+function Sn(...t) {
+  return new En().param(...t);
+}
+function Rn(t) {
+  const e = /* @__PURE__ */ new Set(), n = {};
+  return ut(t, (r) => {
+    const [s, o, i] = r.split(dist_I);
+    e.add(s), (n[s] = n[s] || []).push({
+      line: p(o),
+      path: s,
+      preview: i
     });
-  });
-  return {
-    paths,
-    results
+  }), {
+    paths: e,
+    results: n
   };
 }
-function grep_default() {
+function On() {
   return {
-    grep(searchTerm) {
-      const then = trailingFunctionArgument(arguments);
-      const options = getTrailingOptions(arguments);
-      for (const option of disallowedOptions) {
-        if (options.includes(option)) {
+    grep(t) {
+      const e = u(arguments), n = dist_h(arguments);
+      for (const s of vn)
+        if (n.includes(s))
           return this._runTask(
-            configurationErrorTask(`git.grep: use of "${option}" is not supported.`),
-            then
+            dist_b(`git.grep: use of "${s}" is not supported.`),
+            e
           );
-        }
-      }
-      if (typeof searchTerm === "string") {
-        searchTerm = grepQueryBuilder().param(searchTerm);
-      }
-      const commands = ["grep", "--null", "-n", "--full-name", ...options, ...searchTerm];
+      typeof t == "string" && (t = Sn().param(t));
+      const r = ["grep", "--null", "-n", "--full-name", ...n, ...t];
       return this._runTask(
         {
-          commands,
+          commands: r,
           format: "utf-8",
-          parser(stdOut) {
-            return parseGrep(stdOut);
+          parser(s) {
+            return Rn(s);
           }
         },
-        then
+        e
       );
     }
   };
 }
-var disallowedOptions, Query, _a, GrepQuery;
-var init_grep = __esm({
-  "src/lib/tasks/grep.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
-    disallowedOptions = ["-h"];
-    Query = Symbol("grepQuery");
-    GrepQuery = class {
-      constructor() {
-        this[_a] = [];
-      }
-      *[(_a = Query, Symbol.iterator)]() {
-        for (const query of this[Query]) {
-          yield query;
-        }
-      }
-      and(...and) {
-        and.length && this[Query].push("--and", "(", ...prefixedArray(and, "-e"), ")");
-        return this;
-      }
-      param(...param) {
-        this[Query].push(...prefixedArray(param, "-e"));
-        return this;
-      }
-    };
-  }
-});
-
-// src/lib/tasks/reset.ts
-var reset_exports = {};
-__export(reset_exports, {
-  ResetMode: () => ResetMode,
-  getResetMode: () => getResetMode,
-  resetTask: () => resetTask
-});
-function resetTask(mode, customArgs) {
-  const commands = ["reset"];
-  if (isValidResetMode(mode)) {
-    commands.push(`--${mode}`);
-  }
-  commands.push(...customArgs);
-  return straightThroughStringTask(commands);
+var Vt = /* @__PURE__ */ ((t) => (t.MIXED = "mixed", t.SOFT = "soft", t.HARD = "hard", t.MERGE = "merge", t.KEEP = "keep", t))(Vt || {});
+const Cn = dist_L(Object.values(Vt));
+function An(t, e) {
+  const n = ["reset"];
+  return Xt(t) && n.push(`--${t}`), n.push(...e), g(n);
 }
-function getResetMode(mode) {
-  if (isValidResetMode(mode)) {
-    return mode;
-  }
-  switch (typeof mode) {
+function xn(t) {
+  if (Xt(t))
+    return t;
+  switch (typeof t) {
     case "string":
     case "undefined":
-      return "soft" /* SOFT */;
+      return "soft";
   }
-  return;
 }
-function isValidResetMode(mode) {
-  return typeof mode === "string" && validResetModes.includes(mode);
+function Xt(t) {
+  return typeof t == "string" && Cn.includes(t);
 }
-var ResetMode, validResetModes;
-var init_reset = __esm({
-  "src/lib/tasks/reset.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
-    ResetMode = /* @__PURE__ */ ((ResetMode2) => {
-      ResetMode2["MIXED"] = "mixed";
-      ResetMode2["SOFT"] = "soft";
-      ResetMode2["HARD"] = "hard";
-      ResetMode2["MERGE"] = "merge";
-      ResetMode2["KEEP"] = "keep";
-      return ResetMode2;
-    })(ResetMode || {});
-    validResetModes = asStringArray(Object.values(ResetMode));
-  }
-});
-
-// src/lib/git-logger.ts
-
-function createLog() {
+src.formatters.L = (t) => String(Bt(t) ? t.length : "-");
+src.formatters.B = (t) => Buffer.isBuffer(t) ? t.toString("utf8") : ft(t);
+function Nn() {
   return src("simple-git");
 }
-function prefixedLogger(to, prefix, forward) {
-  if (!prefix || !String(prefix).replace(/\s*/, "")) {
-    return !forward ? to : (message, ...args) => {
-      to(message, ...args);
-      forward(message, ...args);
-    };
-  }
-  return (message, ...args) => {
-    to(`%s ${message}`, prefix, ...args);
-    if (forward) {
-      forward(message, ...args);
-    }
+function vt(t, e, n) {
+  return !e || !String(e).replace(/\s*/, "") ? n ? (r, ...s) => {
+    t(r, ...s), n(r, ...s);
+  } : t : (r, ...s) => {
+    t(`%s ${r}`, e, ...s), n && n(r, ...s);
   };
 }
-function childLoggerName(name, childDebugger, { namespace: parentNamespace }) {
-  if (typeof name === "string") {
-    return name;
-  }
-  const childNamespace = childDebugger && childDebugger.namespace || "";
-  if (childNamespace.startsWith(parentNamespace)) {
-    return childNamespace.substr(parentNamespace.length + 1);
-  }
-  return childNamespace || parentNamespace;
+function $n(t, e, { namespace: n }) {
+  if (typeof t == "string")
+    return t;
+  const r = e && e.namespace || "";
+  return r.startsWith(n) ? r.substr(n.length + 1) : r || n;
 }
-function createLogger(label, verbose, initialStep, infoDebugger = createLog()) {
-  const labelPrefix = label && `[${label}]` || "";
-  const spawned = [];
-  const debugDebugger = typeof verbose === "string" ? infoDebugger.extend(verbose) : verbose;
-  const key = childLoggerName(filterType(verbose, filterString), debugDebugger, infoDebugger);
-  return step(initialStep);
-  function sibling(name, initial) {
-    return append(
-      spawned,
-      createLogger(label, key.replace(/^[^:]+/, name), initial, infoDebugger)
+function dist_$(t, e, n, r = Nn()) {
+  const s = t && `[${t}]` || "", o = [], i = typeof e == "string" ? r.extend(e) : e, a = $n(d(e, m), i, r);
+  return y(n);
+  function c(w, T) {
+    return dist_S(
+      o,
+      dist_$(t, a.replace(/^[^:]+/, w), T, r)
     );
   }
-  function step(phase) {
-    const stepPrefix = phase && `[${phase}]` || "";
-    const debug2 = debugDebugger && prefixedLogger(debugDebugger, stepPrefix) || NOOP;
-    const info = prefixedLogger(infoDebugger, `${labelPrefix} ${stepPrefix}`, debug2);
-    return Object.assign(debugDebugger ? debug2 : info, {
-      label,
-      sibling,
-      info,
-      step
+  function y(w) {
+    const T = w && `[${w}]` || "", k = i && vt(i, T) || dist_W, C = vt(r, `${s} ${T}`, k);
+    return Object.assign(i ? k : C, {
+      label: t,
+      sibling: c,
+      info: C,
+      step: y
     });
   }
 }
-var init_git_logger = __esm({
-  "src/lib/git-logger.ts"() {
-    "use strict";
-    init_utils();
-    src.formatters.L = (value) => String(filterHasLength(value) ? value.length : "-");
-    src.formatters.B = (value) => {
-      if (Buffer.isBuffer(value)) {
-        return value.toString("utf8");
-      }
-      return objectToString(value);
+const dist_M = class M {
+  constructor(e = "GitExecutor") {
+    this.logLabel = e, this._queue = /* @__PURE__ */ new Map();
+  }
+  withProgress(e) {
+    return this._queue.get(e);
+  }
+  createProgress(e) {
+    const n = M.getName(e.commands[0]), r = dist_$(this.logLabel, n);
+    return {
+      task: e,
+      logger: r,
+      name: n
     };
   }
-});
-
-// src/lib/runners/tasks-pending-queue.ts
-var TasksPendingQueue;
-var init_tasks_pending_queue = __esm({
-  "src/lib/runners/tasks-pending-queue.ts"() {
-    "use strict";
-    init_git_error();
-    init_git_logger();
-    TasksPendingQueue = class _TasksPendingQueue {
-      constructor(logLabel = "GitExecutor") {
-        this.logLabel = logLabel;
-        this._queue = /* @__PURE__ */ new Map();
-      }
-      withProgress(task) {
-        return this._queue.get(task);
-      }
-      createProgress(task) {
-        const name = _TasksPendingQueue.getName(task.commands[0]);
-        const logger = createLogger(this.logLabel, name);
-        return {
-          task,
-          logger,
-          name
-        };
-      }
-      push(task) {
-        const progress = this.createProgress(task);
-        progress.logger("Adding task to the queue, commands = %o", task.commands);
-        this._queue.set(task, progress);
-        return progress;
-      }
-      fatal(err) {
-        for (const [task, { logger }] of Array.from(this._queue.entries())) {
-          if (task === err.task) {
-            logger.info(`Failed %o`, err);
-            logger(
-              `Fatal exception, any as-yet un-started tasks run through this executor will not be attempted`
-            );
-          } else {
-            logger.info(
-              `A fatal exception occurred in a previous task, the queue has been purged: %o`,
-              err.message
-            );
-          }
-          this.complete(task);
-        }
-        if (this._queue.size !== 0) {
-          throw new Error(`Queue size should be zero after fatal: ${this._queue.size}`);
-        }
-      }
-      complete(task) {
-        const progress = this.withProgress(task);
-        if (progress) {
-          this._queue.delete(task);
-        }
-      }
-      attempt(task) {
-        const progress = this.withProgress(task);
-        if (!progress) {
-          throw new GitError(void 0, "TasksPendingQueue: attempt called for an unknown task");
-        }
-        progress.logger("Starting task");
-        return progress;
-      }
-      static getName(name = "empty") {
-        return `task:${name}:${++_TasksPendingQueue.counter}`;
-      }
-      static {
-        this.counter = 0;
-      }
-    };
+  push(e) {
+    const n = this.createProgress(e);
+    return n.logger("Adding task to the queue, commands = %o", e.commands), this._queue.set(e, n), n;
   }
-});
-
-// src/lib/runners/git-executor-chain.ts
-
-function pluginContext(task, commands) {
-  return {
-    method: first(task.commands) || "",
-    commands
-  };
-}
-function onErrorReceived(target, logger) {
-  return (err) => {
-    logger(`[ERROR] child process exception %o`, err);
-    target.push(Buffer.from(String(err.stack), "ascii"));
-  };
-}
-function onDataReceived(target, name, logger, output) {
-  return (buffer) => {
-    logger(`%s received %L bytes`, name, buffer);
-    output(`%B`, buffer);
-    target.push(buffer);
-  };
-}
-var GitExecutorChain;
-var init_git_executor_chain = __esm({
-  "src/lib/runners/git-executor-chain.ts"() {
-    "use strict";
-    init_git_error();
-    init_task();
-    init_utils();
-    init_tasks_pending_queue();
-    GitExecutorChain = class {
-      constructor(_executor, _scheduler, _plugins) {
-        this._executor = _executor;
-        this._scheduler = _scheduler;
-        this._plugins = _plugins;
-        this._chain = Promise.resolve();
-        this._queue = new TasksPendingQueue();
-      }
-      get cwd() {
-        return this._cwd || this._executor.cwd;
-      }
-      set cwd(cwd) {
-        this._cwd = cwd;
-      }
-      get env() {
-        return this._executor.env;
-      }
-      get outputHandler() {
-        return this._executor.outputHandler;
-      }
-      chain() {
-        return this;
-      }
-      push(task) {
-        this._queue.push(task);
-        return this._chain = this._chain.then(() => this.attemptTask(task));
-      }
-      async attemptTask(task) {
-        const onScheduleComplete = await this._scheduler.next();
-        const onQueueComplete = () => this._queue.complete(task);
-        try {
-          const { logger } = this._queue.attempt(task);
-          return await (isEmptyTask(task) ? this.attemptEmptyTask(task, logger) : this.attemptRemoteTask(task, logger));
-        } catch (e) {
-          throw this.onFatalException(task, e);
-        } finally {
-          onQueueComplete();
-          onScheduleComplete();
-        }
-      }
-      onFatalException(task, e) {
-        const gitError = e instanceof GitError ? Object.assign(e, { task }) : new GitError(task, e && String(e));
-        this._chain = Promise.resolve();
-        this._queue.fatal(gitError);
-        return gitError;
-      }
-      async attemptRemoteTask(task, logger) {
-        const binary = this._plugins.exec("spawn.binary", "", pluginContext(task, task.commands));
-        const args = this._plugins.exec("spawn.args", [...task.commands], {
-          ...pluginContext(task, task.commands),
-          env: { ...this.env }
-        });
-        const raw = await this.gitResponse(
-          task,
-          binary,
-          args,
-          this.outputHandler,
-          logger.step("SPAWN")
-        );
-        const outputStreams = await this.handleTaskData(task, args, raw, logger.step("HANDLE"));
-        logger(`passing response to task's parser as a %s`, task.format);
-        if (isBufferTask(task)) {
-          return callTaskParser(task.parser, outputStreams);
-        }
-        return callTaskParser(task.parser, outputStreams.asStrings());
-      }
-      async attemptEmptyTask(task, logger) {
-        logger(`empty task bypassing child process to call to task's parser`);
-        return task.parser(this);
-      }
-      handleTaskData(task, args, result, logger) {
-        const { exitCode, rejection, stdOut, stdErr } = result;
-        return new Promise((done, fail) => {
-          logger(`Preparing to handle process response exitCode=%d stdOut=`, exitCode);
-          const { error } = this._plugins.exec(
-            "task.error",
-            { error: rejection },
-            {
-              ...pluginContext(task, args),
-              ...result
-            }
-          );
-          if (error && task.onError) {
-            logger.info(`exitCode=%s handling with custom error handler`);
-            return task.onError(
-              result,
-              error,
-              (newStdOut) => {
-                logger.info(`custom error handler treated as success`);
-                logger(`custom error returned a %s`, objectToString(newStdOut));
-                done(
-                  new GitOutputStreams(
-                    Array.isArray(newStdOut) ? Buffer.concat(newStdOut) : newStdOut,
-                    Buffer.concat(stdErr)
-                  )
-                );
-              },
-              fail
-            );
-          }
-          if (error) {
-            logger.info(
-              `handling as error: exitCode=%s stdErr=%s rejection=%o`,
-              exitCode,
-              stdErr.length,
-              rejection
-            );
-            return fail(error);
-          }
-          logger.info(`retrieving task output complete`);
-          done(new GitOutputStreams(Buffer.concat(stdOut), Buffer.concat(stdErr)));
-        });
-      }
-      async gitResponse(task, command, args, outputHandler, logger) {
-        const outputLogger = logger.sibling("output");
-        const spawnOptions = this._plugins.exec(
-          "spawn.options",
-          {
-            cwd: this.cwd,
-            env: this.env,
-            windowsHide: true
-          },
-          pluginContext(task, task.commands)
-        );
-        return new Promise((done) => {
-          const stdOut = [];
-          const stdErr = [];
-          logger.info(`%s %o`, command, args);
-          logger("%O", spawnOptions);
-          let rejection = this._beforeSpawn(task, args);
-          if (rejection) {
-            return done({
-              stdOut,
-              stdErr,
-              exitCode: 9901,
-              rejection
-            });
-          }
-          this._plugins.exec("spawn.before", void 0, {
-            ...pluginContext(task, args),
-            kill(reason) {
-              rejection = reason || rejection;
-            }
-          });
-          const spawned = (0,external_child_process_namespaceObject.spawn)(command, args, spawnOptions);
-          spawned.stdout.on(
-            "data",
-            onDataReceived(stdOut, "stdOut", logger, outputLogger.step("stdOut"))
-          );
-          spawned.stderr.on(
-            "data",
-            onDataReceived(stdErr, "stdErr", logger, outputLogger.step("stdErr"))
-          );
-          spawned.on("error", onErrorReceived(stdErr, logger));
-          if (outputHandler) {
-            logger(`Passing child process stdOut/stdErr to custom outputHandler`);
-            outputHandler(command, spawned.stdout, spawned.stderr, [...args]);
-          }
-          this._plugins.exec("spawn.after", void 0, {
-            ...pluginContext(task, args),
-            spawned,
-            close(exitCode, reason) {
-              done({
-                stdOut,
-                stdErr,
-                exitCode,
-                rejection: rejection || reason
-              });
-            },
-            kill(reason) {
-              if (spawned.killed) {
-                return;
-              }
-              rejection = reason;
-              spawned.kill("SIGINT");
-            }
-          });
-        });
-      }
-      _beforeSpawn(task, args) {
-        let rejection;
-        this._plugins.exec("spawn.before", void 0, {
-          ...pluginContext(task, args),
-          kill(reason) {
-            rejection = reason || rejection;
-          }
-        });
-        return rejection;
-      }
-    };
+  fatal(e) {
+    for (const [n, { logger: r }] of Array.from(this._queue.entries()))
+      n === e.task ? (r.info("Failed %o", e), r(
+        "Fatal exception, any as-yet un-started tasks run through this executor will not be attempted"
+      )) : r.info(
+        "A fatal exception occurred in a previous task, the queue has been purged: %o",
+        e.message
+      ), this.complete(n);
+    if (this._queue.size !== 0)
+      throw new Error(`Queue size should be zero after fatal: ${this._queue.size}`);
   }
-});
-
-// src/lib/runners/git-executor.ts
-var git_executor_exports = {};
-__export(git_executor_exports, {
-  GitExecutor: () => GitExecutor
-});
-var GitExecutor;
-var init_git_executor = __esm({
-  "src/lib/runners/git-executor.ts"() {
-    "use strict";
-    init_git_executor_chain();
-    GitExecutor = class {
-      constructor(cwd, _scheduler, _plugins) {
-        this.cwd = cwd;
-        this._scheduler = _scheduler;
-        this._plugins = _plugins;
-        this._chain = new GitExecutorChain(this, this._scheduler, this._plugins);
-      }
-      chain() {
-        return new GitExecutorChain(this, this._scheduler, this._plugins);
-      }
-      push(task) {
-        return this._chain.push(task);
-      }
-    };
+  complete(e) {
+    this.withProgress(e) && this._queue.delete(e);
   }
-});
-
-// src/lib/task-callback.ts
-function taskCallback(task, response, callback = NOOP) {
-  const onSuccess = (data) => {
-    callback(null, data);
-  };
-  const onError2 = (err) => {
-    if (err?.task === task) {
-      callback(
-        err instanceof GitResponseError ? addDeprecationNoticeToError(err) : err,
-        void 0
+  attempt(e) {
+    const n = this.withProgress(e);
+    if (!n)
+      throw new dist_O(void 0, "TasksPendingQueue: attempt called for an unknown task");
+    return n.logger("Starting task"), n;
+  }
+  static getName(e = "empty") {
+    return `task:${e}:${++M.counter}`;
+  }
+};
+dist_M.counter = 0;
+let ot = dist_M;
+class Pn {
+  constructor(e, n, r) {
+    this._executor = e, this._scheduler = n, this._plugins = r, this._chain = Promise.resolve(), this._queue = new ot();
+  }
+  get cwd() {
+    return this._cwd || this._executor.cwd;
+  }
+  set cwd(e) {
+    this._cwd = e;
+  }
+  get env() {
+    return this._executor.env;
+  }
+  get outputHandler() {
+    return this._executor.outputHandler;
+  }
+  chain() {
+    return this;
+  }
+  push(e) {
+    return this._queue.push(e), this._chain = this._chain.then(() => this.attemptTask(e));
+  }
+  async attemptTask(e) {
+    const n = await this._scheduler.next(), r = () => this._queue.complete(e);
+    try {
+      const { logger: s } = this._queue.attempt(e);
+      return await (kt(e) ? this.attemptEmptyTask(e, s) : this.attemptRemoteTask(e, s));
+    } catch (s) {
+      throw this.onFatalException(e, s);
+    } finally {
+      r(), n();
+    }
+  }
+  onFatalException(e, n) {
+    const r = n instanceof dist_O ? Object.assign(n, { task: e }) : new dist_O(e, n && String(n));
+    return this._chain = Promise.resolve(), this._queue.fatal(r), r;
+  }
+  async attemptRemoteTask(e, n) {
+    const r = this._plugins.exec("spawn.binary", "", this.taskContext(e, e.commands)), s = this._plugins.exec(
+      "spawn.args",
+      [...e.commands],
+      this.taskContext(e, e.commands)
+    ), o = await this.gitResponse(
+      e,
+      r,
+      s,
+      this.outputHandler,
+      n.step("SPAWN")
+    ), i = await this.handleTaskData(e, s, o, n.step("HANDLE"));
+    return n("passing response to task's parser as a %s", e.format), en(e) ? Tt(e.parser, i) : Tt(e.parser, i.asStrings());
+  }
+  async attemptEmptyTask(e, n) {
+    return n("empty task bypassing child process to call to task's parser"), e.parser(this);
+  }
+  handleTaskData(e, n, r, s) {
+    const { exitCode: o, rejection: i, stdOut: a, stdErr: c } = r;
+    return new Promise((y, w) => {
+      s("Preparing to handle process response exitCode=%d stdOut=", o);
+      const { error: T } = this._plugins.exec(
+        "task.error",
+        { error: i },
+        {
+          ...this.taskContext(e, n),
+          ...r
+        }
       );
-    }
-  };
-  response.then(onSuccess, onError2);
-}
-function addDeprecationNoticeToError(err) {
-  let log = (name) => {
-    console.warn(
-      `simple-git deprecation notice: accessing GitResponseError.${name} should be GitResponseError.git.${name}, this will no longer be available in version 3`
+      if (T && e.onError)
+        return s.info("exitCode=%s handling with custom error handler"), e.onError(
+          r,
+          T,
+          (k) => {
+            s.info("custom error handler treated as success"), s("custom error returned a %s", ft(k)), y(
+              new dist_z(
+                Array.isArray(k) ? Buffer.concat(k) : k,
+                Buffer.concat(c)
+              )
+            );
+          },
+          w
+        );
+      if (T)
+        return s.info(
+          "handling as error: exitCode=%s stdErr=%s rejection=%o",
+          o,
+          c.length,
+          i
+        ), w(T);
+      s.info("retrieving task output complete"), y(new dist_z(Buffer.concat(a), Buffer.concat(c)));
+    });
+  }
+  async gitResponse(e, n, r, s, o) {
+    const i = o.sibling("output"), a = this._plugins.exec(
+      "spawn.options",
+      {
+        cwd: this.cwd,
+        env: this.env,
+        windowsHide: !0
+      },
+      this.taskContext(e, e.commands)
     );
-    log = NOOP;
-  };
-  return Object.create(err, Object.getOwnPropertyNames(err.git).reduce(descriptorReducer, {}));
-  function descriptorReducer(all, name) {
-    if (name in err) {
-      return all;
-    }
-    all[name] = {
-      enumerable: false,
-      configurable: false,
-      get() {
-        log(name);
-        return err.git[name];
+    return new Promise((c) => {
+      const y = [], w = [];
+      o.info("%s %o", n, r), o("%O", a);
+      let T = this._beforeSpawn(e, r);
+      if (T)
+        return c({
+          stdOut: y,
+          stdErr: w,
+          exitCode: 9901,
+          rejection: T
+        });
+      this._plugins.exec("spawn.before", void 0, {
+        ...this.taskContext(e, r),
+        kill(C) {
+          T = C || T;
+        }
+      });
+      const k = (0,external_node_child_process_namespaceObject.spawn)(n, r, a);
+      k.stdout.on(
+        "data",
+        Et(y, "stdOut", o, i.step("stdOut"))
+      ), k.stderr.on(
+        "data",
+        Et(w, "stdErr", o, i.step("stdErr"))
+      ), k.on("error", Mn(w, o)), s && (o("Passing child process stdOut/stdErr to custom outputHandler"), s(n, k.stdout, k.stderr, [...r])), this._plugins.exec("spawn.after", void 0, {
+        ...this.taskContext(e, r),
+        spawned: k,
+        close(C, Te) {
+          c({
+            stdOut: y,
+            stdErr: w,
+            exitCode: C,
+            rejection: T || Te
+          });
+        },
+        kill(C) {
+          k.killed || (T = C, k.kill("SIGINT"));
+        }
+      });
+    });
+  }
+  _beforeSpawn(e, n) {
+    let r;
+    return this._plugins.exec("spawn.before", void 0, {
+      ...this.taskContext(e, n),
+      kill(s) {
+        r = s || r;
       }
+    }), r;
+  }
+  taskContext(e, n) {
+    return {
+      method: String(Me(e.commands) || ""),
+      commands: n,
+      env: { ...this.env },
+      input: kt(e) ? void 0 : e.input
     };
-    return all;
   }
 }
-var init_task_callback = __esm({
-  "src/lib/task-callback.ts"() {
-    "use strict";
-    init_git_response_error();
-    init_utils();
+function Mn(t, e) {
+  return (n) => {
+    e("[ERROR] child process exception %o", n), t.push(Buffer.from(String(n.stack), "ascii"));
+  };
+}
+function Et(t, e, n, r) {
+  return (s) => {
+    n("%s received %L bytes", e, s), r("%B", s), t.push(s);
+  };
+}
+class Dn {
+  constructor(e, n, r) {
+    this.cwd = e, this._scheduler = n, this._plugins = r, this._chain = this.chain();
   }
-});
-
-// src/lib/tasks/change-working-directory.ts
-function changeWorkingDirectoryTask(directory, root) {
-  return adhocExecTask((instance) => {
-    if (!folderExists(directory)) {
-      throw new Error(`Git.cwd: cannot change to non-directory "${directory}"`);
-    }
-    return (root || instance).cwd = directory;
+  chain() {
+    return new Pn(this, this._scheduler, this._plugins);
+  }
+  push(e) {
+    return this._chain.push(e);
+  }
+}
+function Ln(t, e, n = dist_W) {
+  const r = (o) => {
+    n(null, o);
+  }, s = (o) => {
+    o?.task === t && n(o, void 0);
+  };
+  e.then(r, s);
+}
+function St(t, e) {
+  return tn((n) => {
+    if (!Lt(t))
+      throw new Error(`Git.cwd: cannot change to non-directory "${t}"`);
+    return (e || n).cwd = t;
   });
 }
-var init_change_working_directory = __esm({
-  "src/lib/tasks/change-working-directory.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
-  }
-});
-
-// src/lib/tasks/checkout.ts
-function checkoutTask(args) {
-  const commands = ["checkout", ...args];
-  if (commands[1] === "-b" && commands.includes("-B")) {
-    commands[1] = remove(commands, "-B");
-  }
-  return straightThroughStringTask(commands);
+function dist_Q(t) {
+  const e = ["checkout", ...t];
+  return e[1] === "-b" && e.includes("-B") && (e[1] = ct(e, "-B")), g(e);
 }
-function checkout_default() {
+function jn() {
   return {
     checkout() {
       return this._runTask(
-        checkoutTask(getTrailingOptions(arguments, 1)),
-        trailingFunctionArgument(arguments)
+        dist_Q(dist_h(arguments, 1)),
+        u(arguments)
       );
     },
-    checkoutBranch(branchName, startPoint) {
+    checkoutBranch(t, e) {
       return this._runTask(
-        checkoutTask(["-b", branchName, startPoint, ...getTrailingOptions(arguments)]),
-        trailingFunctionArgument(arguments)
+        dist_Q(["-b", t, e, ...dist_h(arguments)]),
+        u(arguments)
       );
     },
-    checkoutLocalBranch(branchName) {
+    checkoutLocalBranch(t) {
       return this._runTask(
-        checkoutTask(["-b", branchName, ...getTrailingOptions(arguments)]),
-        trailingFunctionArgument(arguments)
+        dist_Q(["-b", t, ...dist_h(arguments)]),
+        u(arguments)
       );
     }
   };
 }
-var init_checkout = __esm({
-  "src/lib/tasks/checkout.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
+const Yt = (t, e, n) => {
+  const r = ["clone", ...n];
+  return m(t) && r.push(dist_c(t)), m(e) && r.push(dist_c(e)), g(r);
+}, Bn = (t, e, n) => (dist_S(n, "--mirror"), Yt(t, e, n));
+function Rt(t, e, n, ...r) {
+  return m(n) ? e(n, d(r[0], m), dist_h(arguments)) : dist_b(`git.${t}() requires a string 'repoPath'`);
+}
+function In() {
+  return {
+    clone(t, ...e) {
+      return this._runTask(
+        Rt("clone", Yt, d(t, m), ...e),
+        u(arguments)
+      );
+    },
+    mirror(t, ...e) {
+      return this._runTask(
+        Rt("mirror", Bn, d(t, m), ...e),
+        u(arguments)
+      );
+    }
+  };
+}
+const Un = [
+  new dist_l(/^\[([^\s]+)( \([^)]+\))? ([^\]]+)/, (t, [e, n, r]) => {
+    t.branch = e, t.commit = r, t.root = !!n;
+  }),
+  new dist_l(/\s*Author:\s(.+)/i, (t, [e]) => {
+    const n = e.split("<"), r = n.pop();
+    !r || !r.includes("@") || (t.author = {
+      email: r.substr(0, r.length - 1),
+      name: n.join("<").trim()
+    });
+  }),
+  new dist_l(
+    /(\d+)[^,]*(?:,\s*(\d+)[^,]*)(?:,\s*(\d+))/g,
+    (t, [e, n, r]) => {
+      t.summary.changes = parseInt(e, 10) || 0, t.summary.insertions = parseInt(n, 10) || 0, t.summary.deletions = parseInt(r, 10) || 0;
+    }
+  ),
+  new dist_l(
+    /^(\d+)[^,]*(?:,\s*(\d+)[^(]+\(([+-]))?/,
+    (t, [e, n, r]) => {
+      t.summary.changes = parseInt(e, 10) || 0;
+      const s = parseInt(n, 10) || 0;
+      r === "-" ? t.summary.deletions = s : r === "+" && (t.summary.insertions = s);
+    }
+  )
+];
+function Fn(t) {
+  return dist_E({
+    author: null,
+    branch: "",
+    commit: "",
+    root: !1,
+    summary: {
+      changes: 0,
+      insertions: 0,
+      deletions: 0
+    }
+  }, Un, t);
+}
+function Gn(t, e, n) {
+  return {
+    commands: [
+      "-c",
+      "core.abbrev=40",
+      "commit",
+      ...U(t, "-m"),
+      ...e,
+      ...n
+    ],
+    format: "utf-8",
+    parser: Fn
+  };
+}
+function zn() {
+  return {
+    commit(e, ...n) {
+      const r = u(arguments), s = t(e) || Gn(
+        v(e),
+        v(d(n[0], dist_G, [])),
+        [
+          ...dist_L(d(n[1], dist_K, [])),
+          ...dist_h(arguments, 0, !0)
+        ]
+      );
+      return this._runTask(s, r);
+    }
+  };
+  function t(e) {
+    return !dist_G(e) && dist_b(
+      "git.commit: requires the commit message to be supplied as a string/string[]"
+    );
   }
-});
-
-// src/lib/tasks/count-objects.ts
-function countObjectsResponse() {
+}
+function qn() {
   return {
     count: 0,
     garbage: 0,
@@ -51535,675 +51461,374 @@ function countObjectsResponse() {
     sizePack: 0
   };
 }
-function count_objects_default() {
+const Wn = new dist_l(
+  /([a-z-]+): (\d+)$/,
+  (t, [e, n]) => {
+    const r = jt(e);
+    Object.hasOwn(t, r) && (t[r] = p(n));
+  }
+);
+function Hn() {
   return {
     countObjects() {
       return this._runTask({
         commands: ["count-objects", "--verbose"],
         format: "utf-8",
-        parser(stdOut) {
-          return parseStringResponse(countObjectsResponse(), [parser2], stdOut);
+        parser(t) {
+          return dist_E(qn(), [Wn], t);
         }
       });
     }
   };
 }
-var parser2;
-var init_count_objects = __esm({
-  "src/lib/tasks/count-objects.ts"() {
-    "use strict";
-    init_utils();
-    parser2 = new LineParser(
-      /([a-z-]+): (\d+)$/,
-      (result, [key, value]) => {
-        const property = asCamelCase(key);
-        if (Object.hasOwn(result, property)) {
-          result[property] = asNumber(value);
-        }
-      }
-    );
-  }
-});
-
-// src/lib/parsers/parse-commit.ts
-function parseCommitResult(stdOut) {
-  const result = {
-    author: null,
-    branch: "",
-    commit: "",
-    root: false,
-    summary: {
-      changes: 0,
-      insertions: 0,
-      deletions: 0
-    }
-  };
-  return parseStringResponse(result, parsers, stdOut);
-}
-var parsers;
-var init_parse_commit = __esm({
-  "src/lib/parsers/parse-commit.ts"() {
-    "use strict";
-    init_utils();
-    parsers = [
-      new LineParser(/^\[([^\s]+)( \([^)]+\))? ([^\]]+)/, (result, [branch, root, commit]) => {
-        result.branch = branch;
-        result.commit = commit;
-        result.root = !!root;
-      }),
-      new LineParser(/\s*Author:\s(.+)/i, (result, [author]) => {
-        const parts = author.split("<");
-        const email = parts.pop();
-        if (!email || !email.includes("@")) {
-          return;
-        }
-        result.author = {
-          email: email.substr(0, email.length - 1),
-          name: parts.join("<").trim()
-        };
-      }),
-      new LineParser(
-        /(\d+)[^,]*(?:,\s*(\d+)[^,]*)(?:,\s*(\d+))/g,
-        (result, [changes, insertions, deletions]) => {
-          result.summary.changes = parseInt(changes, 10) || 0;
-          result.summary.insertions = parseInt(insertions, 10) || 0;
-          result.summary.deletions = parseInt(deletions, 10) || 0;
-        }
-      ),
-      new LineParser(
-        /^(\d+)[^,]*(?:,\s*(\d+)[^(]+\(([+-]))?/,
-        (result, [changes, lines, direction]) => {
-          result.summary.changes = parseInt(changes, 10) || 0;
-          const count = parseInt(lines, 10) || 0;
-          if (direction === "-") {
-            result.summary.deletions = count;
-          } else if (direction === "+") {
-            result.summary.insertions = count;
-          }
-        }
-      )
-    ];
-  }
-});
-
-// src/lib/tasks/commit.ts
-function commitTask(message, files, customArgs) {
-  const commands = [
-    "-c",
-    "core.abbrev=40",
-    "commit",
-    ...prefixedArray(message, "-m"),
-    ...files,
-    ...customArgs
-  ];
-  return {
-    commands,
-    format: "utf-8",
-    parser: parseCommitResult
-  };
-}
-function commit_default() {
-  return {
-    commit(message, ...rest) {
-      const next = trailingFunctionArgument(arguments);
-      const task = rejectDeprecatedSignatures(message) || commitTask(
-        asArray(message),
-        asArray(filterType(rest[0], filterStringOrStringArray, [])),
-        [
-          ...asStringArray(filterType(rest[1], filterArray, [])),
-          ...getTrailingOptions(arguments, 0, true)
-        ]
-      );
-      return this._runTask(task, next);
-    }
-  };
-  function rejectDeprecatedSignatures(message) {
-    return !filterStringOrStringArray(message) && configurationErrorTask(
-      `git.commit: requires the commit message to be supplied as a string/string[]`
-    );
-  }
-}
-var init_commit = __esm({
-  "src/lib/tasks/commit.ts"() {
-    "use strict";
-    init_parse_commit();
-    init_utils();
-    init_task();
-  }
-});
-
-// src/lib/tasks/first-commit.ts
-function first_commit_default() {
+function Kn() {
   return {
     firstCommit() {
       return this._runTask(
-        straightThroughStringTask(["rev-list", "--max-parents=0", "HEAD"], true),
-        trailingFunctionArgument(arguments)
+        g(["rev-list", "--max-parents=0", "HEAD"], !0),
+        u(arguments)
       );
     }
   };
 }
-var init_first_commit = __esm({
-  "src/lib/tasks/first-commit.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
-  }
-});
-
-// src/lib/tasks/hash-object.ts
-function hashObjectTask(filePath, write) {
-  const commands = ["hash-object", filePath];
-  if (write) {
-    commands.push("-w");
-  }
-  return straightThroughStringTask(commands, true);
+function Vn(t, e) {
+  const n = ["hash-object", t];
+  return e && n.push("-w"), g(n, !0);
 }
-var init_hash_object = __esm({
-  "src/lib/tasks/hash-object.ts"() {
-    "use strict";
-    init_task();
+class dist_J {
+  constructor(e, n, r, s) {
+    this.bare = e, this.path = n, this.existing = r, this.gitDir = s;
   }
-});
-
-// src/lib/responses/InitSummary.ts
-function parseInit(bare, path, text) {
-  const response = String(text).trim();
-  let result;
-  if (result = initResponseRegex.exec(response)) {
-    return new InitSummary(bare, path, false, result[1]);
-  }
-  if (result = reInitResponseRegex.exec(response)) {
-    return new InitSummary(bare, path, true, result[1]);
-  }
-  let gitDir = "";
-  const tokens = response.split(" ");
-  while (tokens.length) {
-    const token = tokens.shift();
-    if (token === "in") {
-      gitDir = tokens.join(" ");
+}
+const Xn = /^Init.+ repository in (.+)$/, Yn = /^Rein.+ in (.+)$/;
+function Qn(t, e, n) {
+  const r = String(n).trim();
+  let s;
+  if (s = Xn.exec(r))
+    return new dist_J(t, e, !1, s[1]);
+  if (s = Yn.exec(r))
+    return new dist_J(t, e, !0, s[1]);
+  let o = "";
+  const i = r.split(" ");
+  for (; i.length; )
+    if (i.shift() === "in") {
+      o = i.join(" ");
       break;
     }
-  }
-  return new InitSummary(bare, path, /^re/i.test(response), gitDir);
+  return new dist_J(t, e, /^re/i.test(r), o);
 }
-var InitSummary, initResponseRegex, reInitResponseRegex;
-var init_InitSummary = __esm({
-  "src/lib/responses/InitSummary.ts"() {
-    "use strict";
-    InitSummary = class {
-      constructor(bare, path, existing, gitDir) {
-        this.bare = bare;
-        this.path = path;
-        this.existing = existing;
-        this.gitDir = gitDir;
-      }
-    };
-    initResponseRegex = /^Init.+ repository in (.+)$/;
-    reInitResponseRegex = /^Rein.+ in (.+)$/;
-  }
-});
-
-// src/lib/tasks/init.ts
-function hasBareCommand(command) {
-  return command.includes(bareCommand);
+const Qt = "--bare";
+function Jn(t) {
+  return t.includes(Qt);
 }
-function initTask(bare = false, path, customArgs) {
-  const commands = ["init", ...customArgs];
-  if (bare && !hasBareCommand(commands)) {
-    commands.splice(1, 0, bareCommand);
-  }
-  return {
-    commands,
+function Zn(t = !1, e, n) {
+  const r = ["init", ...n];
+  return t && !Jn(r) && r.splice(1, 0, Qt), {
+    commands: r,
     format: "utf-8",
-    parser(text) {
-      return parseInit(commands.includes("--bare"), path, text);
+    parser(s) {
+      return Qn(r.includes("--bare"), e, s);
     }
   };
 }
-var bareCommand;
-var init_init = __esm({
-  "src/lib/tasks/init.ts"() {
-    "use strict";
-    init_InitSummary();
-    bareCommand = "--bare";
-  }
-});
-
-// src/lib/args/log-format.ts
-function logFormatFromCommand(customArgs) {
-  for (let i = 0; i < customArgs.length; i++) {
-    const format = logFormatRegex.exec(customArgs[i]);
-    if (format) {
-      return `--${format[1]}`;
-    }
-  }
-  return "" /* NONE */;
-}
-function isLogFormat(customArg) {
-  return logFormatRegex.test(customArg);
-}
-var logFormatRegex;
-var init_log_format = __esm({
-  "src/lib/args/log-format.ts"() {
-    "use strict";
-    logFormatRegex = /^--(stat|numstat|name-only|name-status)(=|$)/;
-  }
-});
-
-// src/lib/responses/DiffSummary.ts
-var DiffSummary;
-var init_DiffSummary = __esm({
-  "src/lib/responses/DiffSummary.ts"() {
-    "use strict";
-    DiffSummary = class {
-      constructor() {
-        this.changed = 0;
-        this.deletions = 0;
-        this.insertions = 0;
-        this.files = [];
-      }
-    };
-  }
-});
-
-// src/lib/parsers/parse-diff-summary.ts
-function getDiffParser(format = "" /* NONE */) {
-  const parser4 = diffSummaryParsers[format];
-  return (stdOut) => parseStringResponse(new DiffSummary(), parser4, stdOut, false);
-}
-var statParser, numStatParser, nameOnlyParser, nameStatusParser, diffSummaryParsers;
-var init_parse_diff_summary = __esm({
-  "src/lib/parsers/parse-diff-summary.ts"() {
-    "use strict";
-    init_log_format();
-    init_DiffSummary();
-    init_diff_name_status();
-    init_utils();
-    statParser = [
-      new LineParser(
-        /^(.+)\s+\|\s+(\d+)(\s+[+\-]+)?$/,
-        (result, [file, changes, alterations = ""]) => {
-          result.files.push({
-            file: file.trim(),
-            changes: asNumber(changes),
-            insertions: alterations.replace(/[^+]/g, "").length,
-            deletions: alterations.replace(/[^-]/g, "").length,
-            binary: false
-          });
-        }
-      ),
-      new LineParser(
-        /^(.+) \|\s+Bin ([0-9.]+) -> ([0-9.]+) ([a-z]+)/,
-        (result, [file, before, after]) => {
-          result.files.push({
-            file: file.trim(),
-            before: asNumber(before),
-            after: asNumber(after),
-            binary: true
-          });
-        }
-      ),
-      new LineParser(
-        /(\d+) files? changed\s*((?:, \d+ [^,]+){0,2})/,
-        (result, [changed, summary]) => {
-          const inserted = /(\d+) i/.exec(summary);
-          const deleted = /(\d+) d/.exec(summary);
-          result.changed = asNumber(changed);
-          result.insertions = asNumber(inserted?.[1]);
-          result.deletions = asNumber(deleted?.[1]);
-        }
-      )
-    ];
-    numStatParser = [
-      new LineParser(
-        /(\d+)\t(\d+)\t(.+)$/,
-        (result, [changesInsert, changesDelete, file]) => {
-          const insertions = asNumber(changesInsert);
-          const deletions = asNumber(changesDelete);
-          result.changed++;
-          result.insertions += insertions;
-          result.deletions += deletions;
-          result.files.push({
-            file,
-            changes: insertions + deletions,
-            insertions,
-            deletions,
-            binary: false
-          });
-        }
-      ),
-      new LineParser(/-\t-\t(.+)$/, (result, [file]) => {
-        result.changed++;
-        result.files.push({
-          file,
-          after: 0,
-          before: 0,
-          binary: true
-        });
-      })
-    ];
-    nameOnlyParser = [
-      new LineParser(/(.+)$/, (result, [file]) => {
-        result.changed++;
-        result.files.push({
-          file,
-          changes: 0,
-          insertions: 0,
-          deletions: 0,
-          binary: false
-        });
-      })
-    ];
-    nameStatusParser = [
-      new LineParser(
-        /([ACDMRTUXB])([0-9]{0,3})\t(.[^\t]*)(\t(.[^\t]*))?$/,
-        (result, [status, similarity, from, _to, to]) => {
-          result.changed++;
-          result.files.push({
-            file: to ?? from,
-            changes: 0,
-            insertions: 0,
-            deletions: 0,
-            binary: false,
-            status: orVoid(isDiffNameStatus(status) && status),
-            from: orVoid(!!to && from !== to && from),
-            similarity: asNumber(similarity)
-          });
-        }
-      )
-    ];
-    diffSummaryParsers = {
-      ["" /* NONE */]: statParser,
-      ["--stat" /* STAT */]: statParser,
-      ["--numstat" /* NUM_STAT */]: numStatParser,
-      ["--name-status" /* NAME_STATUS */]: nameStatusParser,
-      ["--name-only" /* NAME_ONLY */]: nameOnlyParser
-    };
-  }
-});
-
-// src/lib/parsers/parse-list-log-summary.ts
-function lineBuilder(tokens, fields) {
-  return fields.reduce(
-    (line, field, index) => {
-      line[field] = tokens[index] || "";
-      return line;
+function dist_tr(t) {
+  return t === void 0 ? dist_b("interpretTrailers called without input content") : {
+    format: "utf-8",
+    parser(e) {
+      return Object.fromEntries(
+        ut(e, (n) => {
+          const r = n.indexOf(":");
+          return [
+            jt(n.substring(0, r).toLowerCase()),
+            n.substring(r + 2).trim()
+          ];
+        })
+      );
     },
+    commands: ["interpret-trailers", "--parse"],
+    input: t
+  };
+}
+function er() {
+  return {
+    interpretTrailers(t) {
+      return this._runTask(
+        dist_tr(d(t, Be)),
+        u(arguments)
+      );
+    }
+  };
+}
+var dist_R = /* @__PURE__ */ ((t) => (t.NONE = "", t.STAT = "--stat", t.NUM_STAT = "--numstat", t.NAME_ONLY = "--name-only", t.NAME_STATUS = "--name-status", t))(dist_R || {});
+const Jt = /^--(stat|numstat|name-only|name-status)(=|$)/;
+function pt(t) {
+  for (let e = 0; e < t.length; e++) {
+    const n = Jt.exec(t[e]);
+    if (n)
+      return `--${n[1]}`;
+  }
+  return "";
+}
+function nr(t) {
+  return Jt.test(t);
+}
+class rr {
+  constructor() {
+    this.changed = 0, this.deletions = 0, this.insertions = 0, this.files = [];
+  }
+}
+const Ot = [
+  new dist_l(
+    /^(.+)\s+\|\s+(\d+)(\s+[+\-]+)?$/,
+    (t, [e, n, r = ""]) => {
+      t.files.push({
+        file: e.trim(),
+        changes: p(n),
+        insertions: r.replace(/[^+]/g, "").length,
+        deletions: r.replace(/[^-]/g, "").length,
+        binary: !1
+      });
+    }
+  ),
+  new dist_l(
+    /^(.+) \|\s+Bin ([0-9.]+) -> ([0-9.]+) ([a-z]+)/,
+    (t, [e, n, r]) => {
+      t.files.push({
+        file: e.trim(),
+        before: p(n),
+        after: p(r),
+        binary: !0
+      });
+    }
+  ),
+  new dist_l(/^(.+)\s+\|\s+Bin\s*$/, (t, [e]) => {
+    t.files.push({
+      file: e.trim(),
+      before: 0,
+      after: 0,
+      binary: !0
+    });
+  }),
+  new dist_l(
+    /(\d+) files? changed\s*((?:, \d+ [^,]+){0,2})/,
+    (t, [e, n]) => {
+      const r = /(\d+) i/.exec(n), s = /(\d+) d/.exec(n);
+      t.changed = p(e), t.insertions = p(r?.[1]), t.deletions = p(s?.[1]);
+    }
+  )
+], sr = [
+  new dist_l(
+    /(\d+)\t(\d+)\t(.+)$/,
+    (t, [e, n, r]) => {
+      const s = p(e), o = p(n);
+      t.changed++, t.insertions += s, t.deletions += o, t.files.push({
+        file: r,
+        changes: s + o,
+        insertions: s,
+        deletions: o,
+        binary: !1
+      });
+    }
+  ),
+  new dist_l(/-\t-\t(.+)$/, (t, [e]) => {
+    t.changed++, t.files.push({
+      file: e,
+      after: 0,
+      before: 0,
+      binary: !0
+    });
+  })
+], or = [
+  new dist_l(/(.+)$/, (t, [e]) => {
+    t.changed++, t.files.push({
+      file: e,
+      changes: 0,
+      insertions: 0,
+      deletions: 0,
+      binary: !1
+    });
+  })
+], ir = [
+  new dist_l(
+    /([ACDMRTUXB])([0-9]{0,3})\t(.[^\t]*)(\t(.[^\t]*))?$/,
+    (t, [e, n, r, s, o]) => {
+      t.changed++, t.files.push({
+        file: o ?? r,
+        changes: 0,
+        insertions: 0,
+        deletions: 0,
+        binary: !1,
+        status: bt(_n(e) && e),
+        from: bt(!!o && r !== o && r),
+        similarity: p(n)
+      });
+    }
+  )
+], ar = {
+  [dist_R.NONE]: Ot,
+  [dist_R.STAT]: Ot,
+  [dist_R.NUM_STAT]: sr,
+  [dist_R.NAME_STATUS]: ir,
+  [dist_R.NAME_ONLY]: or
+};
+function Zt(t = dist_R.NONE) {
+  const e = ar[t];
+  return (n) => dist_E(new rr(), e, n, !1);
+}
+const te = "òòòòòò ", dist_ee = " òò", dist_ne = " ò ", ur = ["hash", "date", "message", "refs", "author_name", "author_email"];
+function cr(t, e) {
+  return e.reduce(
+    (n, r, s) => (n[r] = t[s] || "", n),
     /* @__PURE__ */ Object.create({ diff: null })
   );
 }
-function createListLogSummaryParser(splitter = SPLITTER, fields = defaultFieldNames, logFormat = "" /* NONE */) {
-  const parseDiffResult = getDiffParser(logFormat);
-  return function(stdOut) {
-    const all = toLinesWithContent(
-      stdOut.trim(),
-      false,
-      START_BOUNDARY
-    ).map(function(item) {
-      const lineDetail = item.split(COMMIT_BOUNDARY);
-      const listLogLine = lineBuilder(lineDetail[0].split(splitter), fields);
-      if (lineDetail.length > 1 && !!lineDetail[1].trim()) {
-        listLogLine.diff = parseDiffResult(lineDetail[1]);
-      }
-      return listLogLine;
+function re(t = dist_ne, e = ur, n = dist_R.NONE) {
+  const r = Zt(n);
+  return function(s) {
+    const o = dist_H(
+      s.trim(),
+      !1,
+      te
+    ).map(function(i) {
+      const a = i.split(dist_ee), c = cr(a[0].split(t), e);
+      return a.length > 1 && a[1].trim() && (c.diff = r(a[1])), c;
     });
     return {
-      all,
-      latest: all.length && all[0] || null,
-      total: all.length
+      all: o,
+      latest: o.length && o[0] || null,
+      total: o.length
     };
   };
 }
-var START_BOUNDARY, COMMIT_BOUNDARY, SPLITTER, defaultFieldNames;
-var init_parse_list_log_summary = __esm({
-  "src/lib/parsers/parse-list-log-summary.ts"() {
-    "use strict";
-    init_utils();
-    init_parse_diff_summary();
-    init_log_format();
-    START_BOUNDARY = "\xF2\xF2\xF2\xF2\xF2\xF2 ";
-    COMMIT_BOUNDARY = " \xF2\xF2";
-    SPLITTER = " \xF2 ";
-    defaultFieldNames = ["hash", "date", "message", "refs", "author_name", "author_email"];
-  }
-});
-
-// src/lib/tasks/diff.ts
-var diff_exports = {};
-__export(diff_exports, {
-  diffSummaryTask: () => diffSummaryTask,
-  validateLogFormatConfig: () => validateLogFormatConfig
-});
-function diffSummaryTask(customArgs) {
-  let logFormat = logFormatFromCommand(customArgs);
-  const commands = ["diff"];
-  if (logFormat === "" /* NONE */) {
-    logFormat = "--stat" /* STAT */;
-    commands.push("--stat=4096");
-  }
-  commands.push(...customArgs);
-  return validateLogFormatConfig(commands) || {
-    commands,
+function fr(t) {
+  let e = pt(t);
+  const n = ["diff"];
+  return e === dist_R.NONE && (e = dist_R.STAT, n.push("--stat=4096")), n.push(...t), dt(n) || {
+    commands: n,
     format: "utf-8",
-    parser: getDiffParser(logFormat)
+    parser: Zt(e)
   };
 }
-function validateLogFormatConfig(customArgs) {
-  const flags = customArgs.filter(isLogFormat);
-  if (flags.length > 1) {
-    return configurationErrorTask(
-      `Summary flags are mutually exclusive - pick one of ${flags.join(",")}`
+function dt(t) {
+  const e = t.filter(nr);
+  if (e.length > 1)
+    return dist_b(
+      `Summary flags are mutually exclusive - pick one of ${e.join(",")}`
     );
-  }
-  if (flags.length && customArgs.includes("-z")) {
-    return configurationErrorTask(
-      `Summary flag ${flags} parsing is not compatible with null termination option '-z'`
+  if (e.length && t.includes("-z"))
+    return dist_b(
+      `Summary flag ${e} parsing is not compatible with null termination option '-z'`
     );
-  }
 }
-var init_diff = __esm({
-  "src/lib/tasks/diff.ts"() {
-    "use strict";
-    init_log_format();
-    init_parse_diff_summary();
-    init_task();
-  }
-});
-
-// src/lib/tasks/log.ts
-
-function prettyFormat(format, splitter) {
-  const fields = [];
-  const formatStr = [];
-  Object.keys(format).forEach((field) => {
-    fields.push(field);
-    formatStr.push(String(format[field]));
-  });
-  return [fields, formatStr.join(splitter)];
+var se = /* @__PURE__ */ ((t) => (t[t["--pretty"] = 0] = "--pretty", t[t["max-count"] = 1] = "max-count", t[t.maxCount = 2] = "maxCount", t[t.n = 3] = "n", t[t.file = 4] = "file", t[t.format = 5] = "format", t[t.from = 6] = "from", t[t.to = 7] = "to", t[t.splitter = 8] = "splitter", t[t.symmetric = 9] = "symmetric", t[t.mailMap = 10] = "mailMap", t[t.multiLine = 11] = "multiLine", t[t.strictDate = 12] = "strictDate", t))(se || {});
+function lr(t, e) {
+  const n = [], r = [];
+  return Object.keys(t).forEach((s) => {
+    n.push(s), r.push(String(t[s]));
+  }), [n, r.join(e)];
 }
-function userOptions(input) {
-  return Object.keys(input).reduce((out, key) => {
-    if (!(key in excludeOptions)) {
-      out[key] = input[key];
-    }
-    return out;
-  }, {});
+function hr(t) {
+  return Object.keys(t).reduce((e, n) => (n in se || (e[n] = t[n]), e), {});
 }
-function parseLogOptions(opt = {}, customArgs = []) {
-  const splitter = filterType(opt.splitter, filterString, SPLITTER);
-  const format = filterPlainObject(opt.format) ? opt.format : {
+function dist_oe(t = {}, e = []) {
+  const n = d(t.splitter, m, dist_ne), r = lt(t.format) ? t.format : {
     hash: "%H",
-    date: opt.strictDate === false ? "%ai" : "%aI",
+    date: t.strictDate === !1 ? "%ai" : "%aI",
     message: "%s",
     refs: "%D",
-    body: opt.multiLine ? "%B" : "%b",
-    author_name: opt.mailMap !== false ? "%aN" : "%an",
-    author_email: opt.mailMap !== false ? "%aE" : "%ae"
-  };
-  const [fields, formatStr] = prettyFormat(format, splitter);
-  const suffix = [];
-  const command = [
-    `--pretty=format:${START_BOUNDARY}${formatStr}${COMMIT_BOUNDARY}`,
-    ...customArgs
-  ];
-  const maxCount = opt.n || opt["max-count"] || opt.maxCount;
-  if (maxCount) {
-    command.push(`--max-count=${maxCount}`);
+    body: t.multiLine ? "%B" : "%b",
+    author_name: t.mailMap !== !1 ? "%aN" : "%an",
+    author_email: t.mailMap !== !1 ? "%aE" : "%ae"
+  }, [s, o] = lr(r, n), i = [], a = [
+    `--pretty=format:${te}${o}${dist_ee}`,
+    ...e
+  ], c = t.n || t["max-count"] || t.maxCount;
+  if (c && a.push(`--max-count=${c}`), t.from || t.to) {
+    const y = t.symmetric !== !1 ? "..." : "..";
+    i.push(`${t.from || ""}${y}${t.to || ""}`);
   }
-  if (opt.from || opt.to) {
-    const rangeOperator = opt.symmetric !== false ? "..." : "..";
-    suffix.push(`${opt.from || ""}${rangeOperator}${opt.to || ""}`);
-  }
-  if (filterString(opt.file)) {
-    command.push("--follow", c(opt.file));
-  }
-  appendTaskOptions(userOptions(opt), command);
-  return {
-    fields,
-    splitter,
-    commands: [...command, ...suffix]
+  return m(t.file) && a.push("--follow", dist_c(t.file)), It(hr(t), a), {
+    fields: s,
+    splitter: n,
+    commands: [...a, ...i]
   };
 }
-function logTask(splitter, fields, customArgs) {
-  const parser4 = createListLogSummaryParser(splitter, fields, logFormatFromCommand(customArgs));
+function mr(t, e, n) {
+  const r = re(t, e, pt(n));
   return {
-    commands: ["log", ...customArgs],
+    commands: ["log", ...n],
     format: "utf-8",
-    parser: parser4
+    parser: r
   };
 }
-function log_default() {
+function pr() {
   return {
-    log(...rest) {
-      const next = trailingFunctionArgument(arguments);
-      const options = parseLogOptions(
-        trailingOptionsArgument(arguments),
-        asStringArray(filterType(arguments[0], filterArray, []))
-      );
-      const task = rejectDeprecatedSignatures(...rest) || validateLogFormatConfig(options.commands) || createLogTask(options);
-      return this._runTask(task, next);
+    log(...n) {
+      const r = u(arguments), s = dist_oe(
+        ht(arguments),
+        dist_L(d(arguments[0], dist_K, []))
+      ), o = e(...n) || dt(s.commands) || t(s);
+      return this._runTask(o, r);
     }
   };
-  function createLogTask(options) {
-    return logTask(options.splitter, options.fields, options.commands);
+  function t(n) {
+    return mr(n.splitter, n.fields, n.commands);
   }
-  function rejectDeprecatedSignatures(from, to) {
-    return filterString(from) && filterString(to) && configurationErrorTask(
-      `git.log(string, string) should be replaced with git.log({ from: string, to: string })`
+  function e(n, r) {
+    return m(n) && m(r) && dist_b(
+      "git.log(string, string) should be replaced with git.log({ from: string, to: string })"
     );
   }
 }
-var excludeOptions;
-var init_log = __esm({
-  "src/lib/tasks/log.ts"() {
-    "use strict";
-    init_log_format();
-    init_parse_list_log_summary();
-    init_utils();
-    init_task();
-    init_diff();
-    excludeOptions = /* @__PURE__ */ ((excludeOptions2) => {
-      excludeOptions2[excludeOptions2["--pretty"] = 0] = "--pretty";
-      excludeOptions2[excludeOptions2["max-count"] = 1] = "max-count";
-      excludeOptions2[excludeOptions2["maxCount"] = 2] = "maxCount";
-      excludeOptions2[excludeOptions2["n"] = 3] = "n";
-      excludeOptions2[excludeOptions2["file"] = 4] = "file";
-      excludeOptions2[excludeOptions2["format"] = 5] = "format";
-      excludeOptions2[excludeOptions2["from"] = 6] = "from";
-      excludeOptions2[excludeOptions2["to"] = 7] = "to";
-      excludeOptions2[excludeOptions2["splitter"] = 8] = "splitter";
-      excludeOptions2[excludeOptions2["symmetric"] = 9] = "symmetric";
-      excludeOptions2[excludeOptions2["mailMap"] = 10] = "mailMap";
-      excludeOptions2[excludeOptions2["multiLine"] = 11] = "multiLine";
-      excludeOptions2[excludeOptions2["strictDate"] = 12] = "strictDate";
-      return excludeOptions2;
-    })(excludeOptions || {});
+class dist_Z {
+  constructor(e, n = null, r) {
+    this.reason = e, this.file = n, this.meta = r;
   }
-});
-
-// src/lib/responses/MergeSummary.ts
-var MergeSummaryConflict, MergeSummaryDetail;
-var init_MergeSummary = __esm({
-  "src/lib/responses/MergeSummary.ts"() {
-    "use strict";
-    MergeSummaryConflict = class {
-      constructor(reason, file = null, meta) {
-        this.reason = reason;
-        this.file = file;
-        this.meta = meta;
-      }
-      toString() {
-        return `${this.file}:${this.reason}`;
-      }
-    };
-    MergeSummaryDetail = class {
-      constructor() {
-        this.conflicts = [];
-        this.merges = [];
-        this.result = "success";
-      }
-      get failed() {
-        return this.conflicts.length > 0;
-      }
-      get reason() {
-        return this.result;
-      }
-      toString() {
-        if (this.conflicts.length) {
-          return `CONFLICTS: ${this.conflicts.join(", ")}`;
-        }
-        return "OK";
-      }
+  toString() {
+    return `${this.file}:${this.reason}`;
+  }
+}
+class dr {
+  constructor() {
+    this.conflicts = [], this.merges = [], this.result = "success";
+  }
+  get failed() {
+    return this.conflicts.length > 0;
+  }
+  get reason() {
+    return this.result;
+  }
+  toString() {
+    return this.conflicts.length ? `CONFLICTS: ${this.conflicts.join(", ")}` : "OK";
+  }
+}
+class ie {
+  constructor() {
+    this.remoteMessages = {
+      all: []
+    }, this.created = [], this.deleted = [], this.files = [], this.deletions = {}, this.insertions = {}, this.summary = {
+      changes: 0,
+      deletions: 0,
+      insertions: 0
     };
   }
-});
-
-// src/lib/responses/PullSummary.ts
-var PullSummary, PullFailedSummary;
-var init_PullSummary = __esm({
-  "src/lib/responses/PullSummary.ts"() {
-    "use strict";
-    PullSummary = class {
-      constructor() {
-        this.remoteMessages = {
-          all: []
-        };
-        this.created = [];
-        this.deleted = [];
-        this.files = [];
-        this.deletions = {};
-        this.insertions = {};
-        this.summary = {
-          changes: 0,
-          deletions: 0,
-          insertions: 0
-        };
-      }
-    };
-    PullFailedSummary = class {
-      constructor() {
-        this.remote = "";
-        this.hash = {
-          local: "",
-          remote: ""
-        };
-        this.branch = {
-          local: "",
-          remote: ""
-        };
-        this.message = "";
-      }
-      toString() {
-        return this.message;
-      }
-    };
+}
+class gr {
+  constructor() {
+    this.remote = "", this.hash = {
+      local: "",
+      remote: ""
+    }, this.branch = {
+      local: "",
+      remote: ""
+    }, this.message = "";
   }
-});
-
-// src/lib/parsers/parse-remote-objects.ts
-function objectEnumerationResult(remoteMessages) {
-  return remoteMessages.objects = remoteMessages.objects || {
+  toString() {
+    return this.message;
+  }
+}
+function tt(t) {
+  return t.objects = t.objects || {
     compressing: 0,
     counting: 0,
     enumerating: 0,
@@ -52212,2476 +51837,1524 @@ function objectEnumerationResult(remoteMessages) {
     total: { count: 0, delta: 0 }
   };
 }
-function asObjectCount(source) {
-  const count = /^\s*(\d+)/.exec(source);
-  const delta = /delta (\d+)/i.exec(source);
+function Ct(t) {
+  const e = /^\s*(\d+)/.exec(t), n = /delta (\d+)/i.exec(t);
   return {
-    count: asNumber(count && count[1] || "0"),
-    delta: asNumber(delta && delta[1] || "0")
+    count: p(e && e[1] || "0"),
+    delta: p(n && n[1] || "0")
   };
 }
-var remoteMessagesObjectParsers;
-var init_parse_remote_objects = __esm({
-  "src/lib/parsers/parse-remote-objects.ts"() {
-    "use strict";
-    init_utils();
-    remoteMessagesObjectParsers = [
-      new RemoteLineParser(
-        /^remote:\s*(enumerating|counting|compressing) objects: (\d+),/i,
-        (result, [action, count]) => {
-          const key = action.toLowerCase();
-          const enumeration = objectEnumerationResult(result.remoteMessages);
-          Object.assign(enumeration, { [key]: asNumber(count) });
-        }
-      ),
-      new RemoteLineParser(
-        /^remote:\s*(enumerating|counting|compressing) objects: \d+% \(\d+\/(\d+)\),/i,
-        (result, [action, count]) => {
-          const key = action.toLowerCase();
-          const enumeration = objectEnumerationResult(result.remoteMessages);
-          Object.assign(enumeration, { [key]: asNumber(count) });
-        }
-      ),
-      new RemoteLineParser(
-        /total ([^,]+), reused ([^,]+), pack-reused (\d+)/i,
-        (result, [total, reused, packReused]) => {
-          const objects = objectEnumerationResult(result.remoteMessages);
-          objects.total = asObjectCount(total);
-          objects.reused = asObjectCount(reused);
-          objects.packReused = asNumber(packReused);
-        }
-      )
-    ];
-  }
-});
-
-// src/lib/parsers/parse-remote-messages.ts
-function parseRemoteMessages(_stdOut, stdErr) {
-  return parseStringResponse({ remoteMessages: new RemoteMessageSummary() }, parsers2, stdErr);
-}
-var parsers2, RemoteMessageSummary;
-var init_parse_remote_messages = __esm({
-  "src/lib/parsers/parse-remote-messages.ts"() {
-    "use strict";
-    init_utils();
-    init_parse_remote_objects();
-    parsers2 = [
-      new RemoteLineParser(/^remote:\s*(.+)$/, (result, [text]) => {
-        result.remoteMessages.all.push(text.trim());
-        return false;
-      }),
-      ...remoteMessagesObjectParsers,
-      new RemoteLineParser(
-        [/create a (?:pull|merge) request/i, /\s(https?:\/\/\S+)$/],
-        (result, [pullRequestUrl]) => {
-          result.remoteMessages.pullRequestUrl = pullRequestUrl;
-        }
-      ),
-      new RemoteLineParser(
-        [/found (\d+) vulnerabilities.+\(([^)]+)\)/i, /\s(https?:\/\/\S+)$/],
-        (result, [count, summary, url]) => {
-          result.remoteMessages.vulnerabilities = {
-            count: asNumber(count),
-            summary,
-            url
-          };
-        }
-      )
-    ];
-    RemoteMessageSummary = class {
-      constructor() {
-        this.all = [];
-      }
-    };
-  }
-});
-
-// src/lib/parsers/parse-pull.ts
-function parsePullErrorResult(stdOut, stdErr) {
-  const pullError = parseStringResponse(new PullFailedSummary(), errorParsers, [stdOut, stdErr]);
-  return pullError.message && pullError;
-}
-var FILE_UPDATE_REGEX, SUMMARY_REGEX, ACTION_REGEX, parsers3, errorParsers, parsePullDetail, parsePullResult;
-var init_parse_pull = __esm({
-  "src/lib/parsers/parse-pull.ts"() {
-    "use strict";
-    init_PullSummary();
-    init_utils();
-    init_parse_remote_messages();
-    FILE_UPDATE_REGEX = /^\s*(.+?)\s+\|\s+\d+\s*(\+*)(-*)/;
-    SUMMARY_REGEX = /(\d+)\D+((\d+)\D+\(\+\))?(\D+(\d+)\D+\(-\))?/;
-    ACTION_REGEX = /^(create|delete) mode \d+ (.+)/;
-    parsers3 = [
-      new LineParser(FILE_UPDATE_REGEX, (result, [file, insertions, deletions]) => {
-        result.files.push(file);
-        if (insertions) {
-          result.insertions[file] = insertions.length;
-        }
-        if (deletions) {
-          result.deletions[file] = deletions.length;
-        }
-      }),
-      new LineParser(SUMMARY_REGEX, (result, [changes, , insertions, , deletions]) => {
-        if (insertions !== void 0 || deletions !== void 0) {
-          result.summary.changes = +changes || 0;
-          result.summary.insertions = +insertions || 0;
-          result.summary.deletions = +deletions || 0;
-          return true;
-        }
-        return false;
-      }),
-      new LineParser(ACTION_REGEX, (result, [action, file]) => {
-        append(result.files, file);
-        append(action === "create" ? result.created : result.deleted, file);
-      })
-    ];
-    errorParsers = [
-      new LineParser(/^from\s(.+)$/i, (result, [remote]) => void (result.remote = remote)),
-      new LineParser(/^fatal:\s(.+)$/, (result, [message]) => void (result.message = message)),
-      new LineParser(
-        /([a-z0-9]+)\.\.([a-z0-9]+)\s+(\S+)\s+->\s+(\S+)$/,
-        (result, [hashLocal, hashRemote, branchLocal, branchRemote]) => {
-          result.branch.local = branchLocal;
-          result.hash.local = hashLocal;
-          result.branch.remote = branchRemote;
-          result.hash.remote = hashRemote;
-        }
-      )
-    ];
-    parsePullDetail = (stdOut, stdErr) => {
-      return parseStringResponse(new PullSummary(), parsers3, [stdOut, stdErr]);
-    };
-    parsePullResult = (stdOut, stdErr) => {
-      return Object.assign(
-        new PullSummary(),
-        parsePullDetail(stdOut, stdErr),
-        parseRemoteMessages(stdOut, stdErr)
-      );
-    };
-  }
-});
-
-// src/lib/parsers/parse-merge.ts
-var parsers4, parseMergeResult, parseMergeDetail;
-var init_parse_merge = __esm({
-  "src/lib/parsers/parse-merge.ts"() {
-    "use strict";
-    init_MergeSummary();
-    init_utils();
-    init_parse_pull();
-    parsers4 = [
-      new LineParser(/^Auto-merging\s+(.+)$/, (summary, [autoMerge]) => {
-        summary.merges.push(autoMerge);
-      }),
-      new LineParser(/^CONFLICT\s+\((.+)\): Merge conflict in (.+)$/, (summary, [reason, file]) => {
-        summary.conflicts.push(new MergeSummaryConflict(reason, file));
-      }),
-      new LineParser(
-        /^CONFLICT\s+\((.+\/delete)\): (.+) deleted in (.+) and/,
-        (summary, [reason, file, deleteRef]) => {
-          summary.conflicts.push(new MergeSummaryConflict(reason, file, { deleteRef }));
-        }
-      ),
-      new LineParser(/^CONFLICT\s+\((.+)\):/, (summary, [reason]) => {
-        summary.conflicts.push(new MergeSummaryConflict(reason, null));
-      }),
-      new LineParser(/^Automatic merge failed;\s+(.+)$/, (summary, [result]) => {
-        summary.result = result;
-      })
-    ];
-    parseMergeResult = (stdOut, stdErr) => {
-      return Object.assign(parseMergeDetail(stdOut, stdErr), parsePullResult(stdOut, stdErr));
-    };
-    parseMergeDetail = (stdOut) => {
-      return parseStringResponse(new MergeSummaryDetail(), parsers4, stdOut);
-    };
-  }
-});
-
-// src/lib/tasks/merge.ts
-function mergeTask(customArgs) {
-  if (!customArgs.length) {
-    return configurationErrorTask("Git.merge requires at least one option");
-  }
-  return {
-    commands: ["merge", ...customArgs],
-    format: "utf-8",
-    parser(stdOut, stdErr) {
-      const merge = parseMergeResult(stdOut, stdErr);
-      if (merge.failed) {
-        throw new GitResponseError(merge);
-      }
-      return merge;
+const yr = [
+  new dist_x(
+    /^remote:\s*(enumerating|counting|compressing) objects: (\d+),/i,
+    (t, [e, n]) => {
+      const r = e.toLowerCase(), s = tt(t.remoteMessages);
+      Object.assign(s, { [r]: p(n) });
     }
-  };
-}
-var init_merge = __esm({
-  "src/lib/tasks/merge.ts"() {
-    "use strict";
-    init_git_response_error();
-    init_parse_merge();
-    init_task();
-  }
-});
-
-// src/lib/parsers/parse-push.ts
-function pushResultPushedItem(local, remote, status) {
-  const deleted = status.includes("deleted");
-  const tag = status.includes("tag") || /^refs\/tags/.test(local);
-  const alreadyUpdated = !status.includes("new");
-  return {
-    deleted,
-    tag,
-    branch: !tag,
-    new: !alreadyUpdated,
-    alreadyUpdated,
-    local,
-    remote
-  };
-}
-var parsers5, parsePushResult, parsePushDetail;
-var init_parse_push = __esm({
-  "src/lib/parsers/parse-push.ts"() {
-    "use strict";
-    init_utils();
-    init_parse_remote_messages();
-    parsers5 = [
-      new LineParser(/^Pushing to (.+)$/, (result, [repo]) => {
-        result.repo = repo;
-      }),
-      new LineParser(/^updating local tracking ref '(.+)'/, (result, [local]) => {
-        result.ref = {
-          ...result.ref || {},
-          local
-        };
-      }),
-      new LineParser(/^[=*-]\s+([^:]+):(\S+)\s+\[(.+)]$/, (result, [local, remote, type]) => {
-        result.pushed.push(pushResultPushedItem(local, remote, type));
-      }),
-      new LineParser(
-        /^Branch '([^']+)' set up to track remote branch '([^']+)' from '([^']+)'/,
-        (result, [local, remote, remoteName]) => {
-          result.branch = {
-            ...result.branch || {},
-            local,
-            remote,
-            remoteName
-          };
-        }
-      ),
-      new LineParser(
-        /^([^:]+):(\S+)\s+([a-z0-9]+)\.\.([a-z0-9]+)$/,
-        (result, [local, remote, from, to]) => {
-          result.update = {
-            head: {
-              local,
-              remote
-            },
-            hash: {
-              from,
-              to
-            }
-          };
-        }
-      )
-    ];
-    parsePushResult = (stdOut, stdErr) => {
-      const pushDetail = parsePushDetail(stdOut, stdErr);
-      const responseDetail = parseRemoteMessages(stdOut, stdErr);
-      return {
-        ...pushDetail,
-        ...responseDetail
+  ),
+  new dist_x(
+    /^remote:\s*(enumerating|counting|compressing) objects: \d+% \(\d+\/(\d+)\),/i,
+    (t, [e, n]) => {
+      const r = e.toLowerCase(), s = tt(t.remoteMessages);
+      Object.assign(s, { [r]: p(n) });
+    }
+  ),
+  new dist_x(
+    /total ([^,]+), reused ([^,]+), pack-reused (\d+)/i,
+    (t, [e, n, r]) => {
+      const s = tt(t.remoteMessages);
+      s.total = Ct(e), s.reused = Ct(n), s.packReused = p(r);
+    }
+  )
+], wr = [
+  new dist_x(/^remote:\s*(.+)$/, (t, [e]) => (t.remoteMessages.all.push(e.trim()), !1)),
+  ...yr,
+  new dist_x(
+    [/create a (?:pull|merge) request/i, /\s(https?:\/\/\S+)$/],
+    (t, [e]) => {
+      t.remoteMessages.pullRequestUrl = e;
+    }
+  ),
+  new dist_x(
+    [/found (\d+) vulnerabilities.+\(([^)]+)\)/i, /\s(https?:\/\/\S+)$/],
+    (t, [e, n, r]) => {
+      t.remoteMessages.vulnerabilities = {
+        count: p(e),
+        summary: n,
+        url: r
       };
-    };
-    parsePushDetail = (stdOut, stdErr) => {
-      return parseStringResponse({ pushed: [] }, parsers5, [stdOut, stdErr]);
-    };
-  }
-});
-
-// src/lib/tasks/push.ts
-var push_exports = {};
-__export(push_exports, {
-  pushTagsTask: () => pushTagsTask,
-  pushTask: () => pushTask
-});
-function pushTagsTask(ref = {}, customArgs) {
-  append(customArgs, "--tags");
-  return pushTask(ref, customArgs);
+    }
+  )
+];
+function ae(t, e) {
+  return dist_E({ remoteMessages: new br() }, wr, e);
 }
-function pushTask(ref = {}, customArgs) {
-  const commands = ["push", ...customArgs];
-  if (ref.branch) {
-    commands.splice(1, 0, ref.branch);
+class br {
+  constructor() {
+    this.all = [];
   }
-  if (ref.remote) {
-    commands.splice(1, 0, ref.remote);
-  }
-  remove(commands, "-v");
-  append(commands, "--verbose");
-  append(commands, "--porcelain");
-  return {
-    commands,
+}
+const Tr = /^\s*(.+?)\s+\|\s+\d+\s*(\+*)(-*)/, kr = /(\d+)\D+((\d+)\D+\(\+\))?(\D+(\d+)\D+\(-\))?/, _r = /^(create|delete) mode \d+ (.+)/, vr = [
+  new dist_l(Tr, (t, [e, n, r]) => {
+    t.files.push(e), n && (t.insertions[e] = n.length), r && (t.deletions[e] = r.length);
+  }),
+  new dist_l(kr, (t, [e, , n, , r]) => n !== void 0 || r !== void 0 ? (t.summary.changes = +e || 0, t.summary.insertions = +n || 0, t.summary.deletions = +r || 0, !0) : !1),
+  new dist_l(_r, (t, [e, n]) => {
+    dist_S(t.files, n), dist_S(e === "create" ? t.created : t.deleted, n);
+  })
+], Er = [
+  new dist_l(/^from\s(.+)$/i, (t, [e]) => {
+    t.remote = e;
+  }),
+  new dist_l(/^fatal:\s(.+)$/, (t, [e]) => {
+    t.message = e;
+  }),
+  new dist_l(
+    /([a-z0-9]+)\.\.([a-z0-9]+)\s+(\S+)\s+->\s+(\S+)$/,
+    (t, [e, n, r, s]) => {
+      t.branch.local = r, t.hash.local = e, t.branch.remote = s, t.hash.remote = n;
+    }
+  )
+], Sr = (t, e) => dist_E(new ie(), vr, [t, e]), ue = (t, e) => Object.assign(
+  new ie(),
+  Sr(t, e),
+  ae(t, e)
+);
+function Rr(t, e) {
+  const n = dist_E(new gr(), Er, [t, e]);
+  return n.message && n;
+}
+const Or = [
+  new dist_l(/^Auto-merging\s+(.+)$/, (t, [e]) => {
+    t.merges.push(e);
+  }),
+  new dist_l(/^CONFLICT\s+\((.+)\): Merge conflict in (.+)$/, (t, [e, n]) => {
+    t.conflicts.push(new dist_Z(e, n));
+  }),
+  new dist_l(
+    /^CONFLICT\s+\((.+\/delete)\): (.+) deleted in (.+) and/,
+    (t, [e, n, r]) => {
+      t.conflicts.push(new dist_Z(e, n, { deleteRef: r }));
+    }
+  ),
+  new dist_l(/^CONFLICT\s+\((.+)\):/, (t, [e]) => {
+    t.conflicts.push(new dist_Z(e, null));
+  }),
+  new dist_l(/^Automatic merge failed;\s+(.+)$/, (t, [e]) => {
+    t.result = e;
+  })
+], Cr = (t, e) => Object.assign(Ar(t), ue(t, e)), Ar = (t) => dist_E(new dr(), Or, t);
+function At(t) {
+  return t.length ? {
+    commands: ["merge", ...t],
     format: "utf-8",
-    parser: parsePushResult
+    parser(e, n) {
+      const r = Cr(e, n);
+      if (r.failed)
+        throw new at(r);
+      return r;
+    }
+  } : dist_b("Git.merge requires at least one option");
+}
+function xr(t, e, n) {
+  const r = n.includes("deleted"), s = n.includes("tag") || /^refs\/tags/.test(t), o = !n.includes("new");
+  return {
+    deleted: r,
+    tag: s,
+    branch: !s,
+    new: !o,
+    alreadyUpdated: o,
+    local: t,
+    remote: e
   };
 }
-var init_push = __esm({
-  "src/lib/tasks/push.ts"() {
-    "use strict";
-    init_parse_push();
-    init_utils();
-  }
-});
-
-// src/lib/tasks/show.ts
-function show_default() {
+const Nr = [
+  new dist_l(/^Pushing to (.+)$/, (t, [e]) => {
+    t.repo = e;
+  }),
+  new dist_l(/^updating local tracking ref '(.+)'/, (t, [e]) => {
+    t.ref = {
+      ...t.ref || {},
+      local: e
+    };
+  }),
+  new dist_l(/^[=*-]\s+([^:]+):(\S+)\s+\[(.+)]$/, (t, [e, n, r]) => {
+    t.pushed.push(xr(e, n, r));
+  }),
+  new dist_l(
+    /^Branch '([^']+)' set up to track remote branch '([^']+)' from '([^']+)'/,
+    (t, [e, n, r]) => {
+      t.branch = {
+        ...t.branch || {},
+        local: e,
+        remote: n,
+        remoteName: r
+      };
+    }
+  ),
+  new dist_l(
+    /^([^:]+):(\S+)\s+([a-z0-9]+)\.\.([a-z0-9]+)$/,
+    (t, [e, n, r, s]) => {
+      t.update = {
+        head: {
+          local: e,
+          remote: n
+        },
+        hash: {
+          from: r,
+          to: s
+        }
+      };
+    }
+  )
+], $r = (t, e) => {
+  const n = Pr(t, e), r = ae(t, e);
+  return {
+    ...n,
+    ...r
+  };
+}, Pr = (t, e) => dist_E({ pushed: [] }, Nr, [t, e]);
+function Mr(t = {}, e) {
+  return dist_S(e, "--tags"), ce(t, e);
+}
+function ce(t = {}, e) {
+  const n = ["push", ...e];
+  return t.branch && n.splice(1, 0, t.branch), t.remote && n.splice(1, 0, t.remote), ct(n, "-v"), dist_S(n, "--verbose"), dist_S(n, "--porcelain"), {
+    commands: n,
+    format: "utf-8",
+    parser: $r
+  };
+}
+function Dr() {
   return {
     showBuffer() {
-      const commands = ["show", ...getTrailingOptions(arguments, 1)];
-      if (!commands.includes("--binary")) {
-        commands.splice(1, 0, "--binary");
-      }
-      return this._runTask(
-        straightThroughBufferTask(commands),
-        trailingFunctionArgument(arguments)
+      const t = ["show", ...dist_h(arguments, 1)];
+      return t.includes("--binary") || t.splice(1, 0, "--binary"), this._runTask(
+        Gt(t),
+        u(arguments)
       );
     },
     show() {
-      const commands = ["show", ...getTrailingOptions(arguments, 1)];
+      const t = ["show", ...dist_h(arguments, 1)];
       return this._runTask(
-        straightThroughStringTask(commands),
-        trailingFunctionArgument(arguments)
+        g(t),
+        u(arguments)
       );
     }
   };
 }
-var init_show = __esm({
-  "src/lib/tasks/show.ts"() {
-    "use strict";
-    init_utils();
-    init_task();
+const Lr = /^(.+)\0(.+)$/;
+class jr {
+  constructor(e, n, r) {
+    if (this.path = e, this.index = n, this.working_dir = r, n === "R" || r === "R") {
+      const s = Lr.exec(e) || [null, e, e];
+      this.from = s[2] || "", this.path = s[1] || "";
+    }
   }
-});
-
-// src/lib/responses/FileStatusSummary.ts
-var fromPathRegex, FileStatusSummary;
-var init_FileStatusSummary = __esm({
-  "src/lib/responses/FileStatusSummary.ts"() {
-    "use strict";
-    fromPathRegex = /^(.+)\0(.+)$/;
-    FileStatusSummary = class {
-      constructor(path, index, working_dir) {
-        this.path = path;
-        this.index = index;
-        this.working_dir = working_dir;
-        if (index === "R" || working_dir === "R") {
-          const detail = fromPathRegex.exec(path) || [null, path, path];
-          this.from = detail[2] || "";
-          this.path = detail[1] || "";
-        }
-      }
-    };
+}
+class Br {
+  constructor() {
+    this.not_added = [], this.conflicted = [], this.created = [], this.deleted = [], this.ignored = void 0, this.modified = [], this.renamed = [], this.files = [], this.staged = [], this.ahead = 0, this.behind = 0, this.current = null, this.tracking = null, this.detached = !1, this.isClean = () => !this.files.length;
   }
-});
-
-// src/lib/responses/StatusSummary.ts
-function renamedFile(line) {
-  const [to, from] = line.split(NULL);
+}
+function xt(t) {
+  const [e, n] = t.split(dist_I);
   return {
-    from: from || to,
-    to
+    from: n || e,
+    to: e
   };
 }
-function parser3(indexX, indexY, handler) {
-  return [`${indexX}${indexY}`, handler];
+function dist_(t, e, n) {
+  return [`${t}${e}`, n];
 }
-function conflicts(indexX, ...indexY) {
-  return indexY.map((y) => parser3(indexX, y, (result, file) => result.conflicted.push(file)));
+function et(t, ...e) {
+  return e.map((n) => dist_(t, n, (r, s) => r.conflicted.push(s)));
 }
-function splitLine(result, lineStr) {
-  const trimmed2 = lineStr.trim();
+const Ir = new Map([
+  dist_(
+    " ",
+    "A",
+    (t, e) => t.created.push(e)
+  ),
+  dist_(
+    " ",
+    "D",
+    (t, e) => t.deleted.push(e)
+  ),
+  dist_(
+    " ",
+    "M",
+    (t, e) => t.modified.push(e)
+  ),
+  dist_("A", " ", (t, e) => {
+    t.created.push(e), t.staged.push(e);
+  }),
+  dist_("A", "M", (t, e) => {
+    t.created.push(e), t.staged.push(e), t.modified.push(e);
+  }),
+  dist_("D", " ", (t, e) => {
+    t.deleted.push(e), t.staged.push(e);
+  }),
+  dist_("M", " ", (t, e) => {
+    t.modified.push(e), t.staged.push(e);
+  }),
+  dist_("M", "M", (t, e) => {
+    t.modified.push(e), t.staged.push(e);
+  }),
+  dist_("R", " ", (t, e) => {
+    t.renamed.push(xt(e));
+  }),
+  dist_("R", "M", (t, e) => {
+    const n = xt(e);
+    t.renamed.push(n), t.modified.push(n.to);
+  }),
+  dist_("!", "!", (t, e) => {
+    (t.ignored = t.ignored || []).push(e);
+  }),
+  dist_(
+    "?",
+    "?",
+    (t, e) => t.not_added.push(e)
+  ),
+  ...et(
+    "A",
+    "A",
+    "U"
+    /* UNMERGED */
+  ),
+  ...et(
+    "D",
+    "D",
+    "U"
+    /* UNMERGED */
+  ),
+  ...et(
+    "U",
+    "A",
+    "D",
+    "U"
+    /* UNMERGED */
+  ),
+  [
+    "##",
+    (t, e) => {
+      const n = /ahead (\d+)/, r = /behind (\d+)/, s = /^(.+?(?=(?:\.{3}|\s|$)))/, o = /\.{3}(\S*)/, i = /\son\s(\S+?)(?=\.{3}|$)/;
+      let a = n.exec(e);
+      t.ahead = a && +a[1] || 0, a = r.exec(e), t.behind = a && +a[1] || 0, a = s.exec(e), t.current = d(a?.[1], m, null), a = o.exec(e), t.tracking = d(a?.[1], m, null), a = i.exec(e), a && (t.current = d(a?.[1], m, t.current)), t.detached = /\(no branch\)/.test(e);
+    }
+  ]
+]), Ur = function(t) {
+  const e = t.split(dist_I), n = new Br();
+  for (let r = 0, s = e.length; r < s; ) {
+    let o = e[r++].trim();
+    o && (o.charAt(0) === "R" && (o += dist_I + (e[r++] || "")), Fr(n, o));
+  }
+  return n;
+};
+function Fr(t, e) {
+  const n = e.trim();
   switch (" ") {
-    case trimmed2.charAt(2):
-      return data(trimmed2.charAt(0), trimmed2.charAt(1), trimmed2.slice(3));
-    case trimmed2.charAt(1):
-      return data(" " /* NONE */, trimmed2.charAt(0), trimmed2.slice(2));
+    case n.charAt(2):
+      return r(n.charAt(0), n.charAt(1), n.slice(3));
+    case n.charAt(1):
+      return r(" ", n.charAt(0), n.slice(2));
     default:
       return;
   }
-  function data(index, workingDir, path) {
-    const raw = `${index}${workingDir}`;
-    const handler = parsers6.get(raw);
-    if (handler) {
-      handler(result, path);
-    }
-    if (raw !== "##" && raw !== "!!") {
-      result.files.push(new FileStatusSummary(path, index, workingDir));
-    }
+  function r(s, o, i) {
+    const a = `${s}${o}`, c = Ir.get(a);
+    c && c(t, i), a !== "##" && a !== "!!" && t.files.push(new jr(i, s, o));
   }
 }
-var StatusSummary, parsers6, parseStatusSummary;
-var init_StatusSummary = __esm({
-  "src/lib/responses/StatusSummary.ts"() {
-    "use strict";
-    init_utils();
-    init_FileStatusSummary();
-    StatusSummary = class {
-      constructor() {
-        this.not_added = [];
-        this.conflicted = [];
-        this.created = [];
-        this.deleted = [];
-        this.ignored = void 0;
-        this.modified = [];
-        this.renamed = [];
-        this.files = [];
-        this.staged = [];
-        this.ahead = 0;
-        this.behind = 0;
-        this.current = null;
-        this.tracking = null;
-        this.detached = false;
-        this.isClean = () => {
-          return !this.files.length;
-        };
-      }
-    };
-    parsers6 = new Map([
-      parser3(
-        " " /* NONE */,
-        "A" /* ADDED */,
-        (result, file) => result.created.push(file)
-      ),
-      parser3(
-        " " /* NONE */,
-        "D" /* DELETED */,
-        (result, file) => result.deleted.push(file)
-      ),
-      parser3(
-        " " /* NONE */,
-        "M" /* MODIFIED */,
-        (result, file) => result.modified.push(file)
-      ),
-      parser3("A" /* ADDED */, " " /* NONE */, (result, file) => {
-        result.created.push(file);
-        result.staged.push(file);
-      }),
-      parser3("A" /* ADDED */, "M" /* MODIFIED */, (result, file) => {
-        result.created.push(file);
-        result.staged.push(file);
-        result.modified.push(file);
-      }),
-      parser3("D" /* DELETED */, " " /* NONE */, (result, file) => {
-        result.deleted.push(file);
-        result.staged.push(file);
-      }),
-      parser3("M" /* MODIFIED */, " " /* NONE */, (result, file) => {
-        result.modified.push(file);
-        result.staged.push(file);
-      }),
-      parser3("M" /* MODIFIED */, "M" /* MODIFIED */, (result, file) => {
-        result.modified.push(file);
-        result.staged.push(file);
-      }),
-      parser3("R" /* RENAMED */, " " /* NONE */, (result, file) => {
-        result.renamed.push(renamedFile(file));
-      }),
-      parser3("R" /* RENAMED */, "M" /* MODIFIED */, (result, file) => {
-        const renamed = renamedFile(file);
-        result.renamed.push(renamed);
-        result.modified.push(renamed.to);
-      }),
-      parser3("!" /* IGNORED */, "!" /* IGNORED */, (_result, _file) => {
-        (_result.ignored = _result.ignored || []).push(_file);
-      }),
-      parser3(
-        "?" /* UNTRACKED */,
-        "?" /* UNTRACKED */,
-        (result, file) => result.not_added.push(file)
-      ),
-      ...conflicts("A" /* ADDED */, "A" /* ADDED */, "U" /* UNMERGED */),
-      ...conflicts(
-        "D" /* DELETED */,
-        "D" /* DELETED */,
-        "U" /* UNMERGED */
-      ),
-      ...conflicts(
-        "U" /* UNMERGED */,
-        "A" /* ADDED */,
-        "D" /* DELETED */,
-        "U" /* UNMERGED */
-      ),
-      [
-        "##",
-        (result, line) => {
-          const aheadReg = /ahead (\d+)/;
-          const behindReg = /behind (\d+)/;
-          const currentReg = /^(.+?(?=(?:\.{3}|\s|$)))/;
-          const trackingReg = /\.{3}(\S*)/;
-          const onEmptyBranchReg = /\son\s(\S+?)(?=\.{3}|$)/;
-          let regexResult = aheadReg.exec(line);
-          result.ahead = regexResult && +regexResult[1] || 0;
-          regexResult = behindReg.exec(line);
-          result.behind = regexResult && +regexResult[1] || 0;
-          regexResult = currentReg.exec(line);
-          result.current = filterType(regexResult?.[1], filterString, null);
-          regexResult = trackingReg.exec(line);
-          result.tracking = filterType(regexResult?.[1], filterString, null);
-          regexResult = onEmptyBranchReg.exec(line);
-          if (regexResult) {
-            result.current = filterType(regexResult?.[1], filterString, result.current);
-          }
-          result.detached = /\(no branch\)/.test(line);
-        }
-      ]
-    ]);
-    parseStatusSummary = function(text) {
-      const lines = text.split(NULL);
-      const status = new StatusSummary();
-      for (let i = 0, l = lines.length; i < l; ) {
-        let line = lines[i++].trim();
-        if (!line) {
-          continue;
-        }
-        if (line.charAt(0) === "R" /* RENAMED */) {
-          line += NULL + (lines[i++] || "");
-        }
-        splitLine(status, line);
-      }
-      return status;
-    };
-  }
-});
-
-// src/lib/tasks/status.ts
-function statusTask(customArgs) {
-  const commands = [
-    "status",
-    "--porcelain",
-    "-b",
-    "-u",
-    "--null",
-    ...customArgs.filter((arg) => !ignoredOptions.includes(arg))
-  ];
+const Gr = ["--null", "-z"];
+function zr(t) {
   return {
     format: "utf-8",
-    commands,
-    parser(text) {
-      return parseStatusSummary(text);
+    commands: [
+      "status",
+      "--porcelain",
+      "-b",
+      "-u",
+      "--null",
+      ...t.filter((n) => !Gr.includes(n))
+    ],
+    parser(n) {
+      return Ur(n);
     }
   };
 }
-var ignoredOptions;
-var init_status = __esm({
-  "src/lib/tasks/status.ts"() {
-    "use strict";
-    init_StatusSummary();
-    ignoredOptions = ["--null", "-z"];
-  }
-});
-
-// src/lib/tasks/version.ts
-function versionResponse(major = 0, minor = 0, patch = 0, agent = "", installed = true) {
+const fe = "installed=false";
+function dist_q(t = 0, e = 0, n = 0, r = "", s = !0) {
   return Object.defineProperty(
     {
-      major,
-      minor,
-      patch,
-      agent,
-      installed
+      major: t,
+      minor: e,
+      patch: n,
+      agent: r,
+      installed: s
     },
     "toString",
     {
       value() {
         return `${this.major}.${this.minor}.${this.patch}`;
       },
-      configurable: false,
-      enumerable: false
+      configurable: !1,
+      enumerable: !1
     }
   );
 }
-function notInstalledResponse() {
-  return versionResponse(0, 0, 0, "", false);
+function qr() {
+  return dist_q(0, 0, 0, "", !1);
 }
-function version_default() {
+function Wr() {
   return {
     version() {
       return this._runTask({
         commands: ["--version"],
         format: "utf-8",
-        parser: versionParser,
-        onError(result, error, done, fail) {
-          if (result.exitCode === -2 /* NOT_FOUND */) {
-            return done(Buffer.from(NOT_INSTALLED));
-          }
-          fail(error);
+        parser: Kr,
+        onError(t, e, n, r) {
+          if (t.exitCode === dist_V.NOT_FOUND)
+            return n(Buffer.from(fe));
+          r(e);
         }
       });
     }
   };
 }
-function versionParser(stdOut) {
-  if (stdOut === NOT_INSTALLED) {
-    return notInstalledResponse();
-  }
-  return parseStringResponse(versionResponse(0, 0, 0, stdOut), parsers7, stdOut);
-}
-var NOT_INSTALLED, parsers7;
-var init_version = __esm({
-  "src/lib/tasks/version.ts"() {
-    "use strict";
-    init_utils();
-    NOT_INSTALLED = "installed=false";
-    parsers7 = [
-      new LineParser(
-        /version (\d+)\.(\d+)\.(\d+)(?:\s*\((.+)\))?/,
-        (result, [major, minor, patch, agent = ""]) => {
-          Object.assign(
-            result,
-            versionResponse(asNumber(major), asNumber(minor), asNumber(patch), agent)
-          );
-        }
-      ),
-      new LineParser(
-        /version (\d+)\.(\d+)\.(\D+)(.+)?$/,
-        (result, [major, minor, patch, agent = ""]) => {
-          Object.assign(result, versionResponse(asNumber(major), asNumber(minor), patch, agent));
-        }
-      )
-    ];
-  }
-});
-
-// src/lib/tasks/clone.ts
-
-function createCloneTask(api, task, repoPath, ...args) {
-  if (!filterString(repoPath)) {
-    return configurationErrorTask(`git.${api}() requires a string 'repoPath'`);
-  }
-  return task(repoPath, filterType(args[0], filterString), getTrailingOptions(arguments));
-}
-function clone_default() {
-  return {
-    clone(repo, ...rest) {
-      return this._runTask(
-        createCloneTask("clone", cloneTask, filterType(repo, filterString), ...rest),
-        trailingFunctionArgument(arguments)
-      );
-    },
-    mirror(repo, ...rest) {
-      return this._runTask(
-        createCloneTask("mirror", cloneMirrorTask, filterType(repo, filterString), ...rest),
-        trailingFunctionArgument(arguments)
+const Hr = [
+  new dist_l(
+    /version (\d+)\.(\d+)\.(\d+)(?:\s*\((.+)\))?/,
+    (t, [e, n, r, s = ""]) => {
+      Object.assign(
+        t,
+        dist_q(p(e), p(n), p(r), s)
       );
     }
-  };
+  ),
+  new dist_l(
+    /version (\d+)\.(\d+)\.(\D+)(.+)?$/,
+    (t, [e, n, r, s = ""]) => {
+      Object.assign(t, dist_q(p(e), p(n), r, s));
+    }
+  )
+];
+function Kr(t) {
+  return t === fe ? qr() : dist_E(dist_q(0, 0, 0, t), Hr, t);
 }
-var cloneTask, cloneMirrorTask;
-var init_clone = __esm({
-  "src/lib/tasks/clone.ts"() {
-    "use strict";
-    init_task();
-    init_utils();
-    cloneTask = (repo, directory, customArgs) => {
-      const commands = ["clone", ...customArgs];
-      filterString(repo) && commands.push(c(repo));
-      filterString(directory) && commands.push(c(directory));
-      return straightThroughStringTask(commands);
-    };
-    cloneMirrorTask = (repo, directory, customArgs) => {
-      append(customArgs, "--mirror");
-      return cloneTask(repo, directory, customArgs);
-    };
+class le {
+  constructor(e) {
+    this._executor = e;
   }
-});
-
-// src/lib/simple-git-api.ts
-var simple_git_api_exports = {};
-__export(simple_git_api_exports, {
-  SimpleGitApi: () => SimpleGitApi
-});
-var SimpleGitApi;
-var init_simple_git_api = __esm({
-  "src/lib/simple-git-api.ts"() {
-    "use strict";
-    init_task_callback();
-    init_change_working_directory();
-    init_checkout();
-    init_count_objects();
-    init_commit();
-    init_config();
-    init_first_commit();
-    init_grep();
-    init_hash_object();
-    init_init();
-    init_log();
-    init_merge();
-    init_push();
-    init_show();
-    init_status();
-    init_task();
-    init_version();
-    init_utils();
-    init_clone();
-    SimpleGitApi = class {
-      constructor(_executor) {
-        this._executor = _executor;
-      }
-      _runTask(task, then) {
-        const chain = this._executor.chain();
-        const promise = chain.push(task);
-        if (then) {
-          taskCallback(task, promise, then);
-        }
-        return Object.create(this, {
-          then: { value: promise.then.bind(promise) },
-          catch: { value: promise.catch.bind(promise) },
-          _executor: { value: chain }
-        });
-      }
-      add(files) {
-        return this._runTask(
-          straightThroughStringTask(["add", ...asArray(files)]),
-          trailingFunctionArgument(arguments)
-        );
-      }
-      cwd(directory) {
-        const next = trailingFunctionArgument(arguments);
-        if (typeof directory === "string") {
-          return this._runTask(changeWorkingDirectoryTask(directory, this._executor), next);
-        }
-        if (typeof directory?.path === "string") {
-          return this._runTask(
-            changeWorkingDirectoryTask(
-              directory.path,
-              directory.root && this._executor || void 0
-            ),
-            next
-          );
-        }
-        return this._runTask(
-          configurationErrorTask("Git.cwd: workingDirectory must be supplied as a string"),
-          next
-        );
-      }
-      hashObject(path, write) {
-        return this._runTask(
-          hashObjectTask(path, write === true),
-          trailingFunctionArgument(arguments)
-        );
-      }
-      init(bare) {
-        return this._runTask(
-          initTask(bare === true, this._executor.cwd, getTrailingOptions(arguments)),
-          trailingFunctionArgument(arguments)
-        );
-      }
-      merge() {
-        return this._runTask(
-          mergeTask(getTrailingOptions(arguments)),
-          trailingFunctionArgument(arguments)
-        );
-      }
-      mergeFromTo(remote, branch) {
-        if (!(filterString(remote) && filterString(branch))) {
-          return this._runTask(
-            configurationErrorTask(
-              `Git.mergeFromTo requires that the 'remote' and 'branch' arguments are supplied as strings`
-            )
-          );
-        }
-        return this._runTask(
-          mergeTask([remote, branch, ...getTrailingOptions(arguments)]),
-          trailingFunctionArgument(arguments, false)
-        );
-      }
-      outputHandler(handler) {
-        this._executor.outputHandler = handler;
-        return this;
-      }
-      push() {
-        const task = pushTask(
-          {
-            remote: filterType(arguments[0], filterString),
-            branch: filterType(arguments[1], filterString)
-          },
-          getTrailingOptions(arguments)
-        );
-        return this._runTask(task, trailingFunctionArgument(arguments));
-      }
-      stash() {
-        return this._runTask(
-          straightThroughStringTask(["stash", ...getTrailingOptions(arguments)]),
-          trailingFunctionArgument(arguments)
-        );
-      }
-      status() {
-        return this._runTask(
-          statusTask(getTrailingOptions(arguments)),
-          trailingFunctionArgument(arguments)
-        );
-      }
-    };
-    Object.assign(
-      SimpleGitApi.prototype,
-      checkout_default(),
-      clone_default(),
-      commit_default(),
-      config_default(),
-      count_objects_default(),
-      first_commit_default(),
-      grep_default(),
-      log_default(),
-      show_default(),
-      version_default()
-    );
-  }
-});
-
-// src/lib/runners/scheduler.ts
-var scheduler_exports = {};
-__export(scheduler_exports, {
-  Scheduler: () => Scheduler
-});
-
-var createScheduledTask, Scheduler;
-var init_scheduler = __esm({
-  "src/lib/runners/scheduler.ts"() {
-    "use strict";
-    init_utils();
-    init_git_logger();
-    createScheduledTask = /* @__PURE__ */ (() => {
-      let id = 0;
-      return () => {
-        id++;
-        const { promise, done } = (0,promise_deferred_dist/* createDeferred */.ud)();
-        return {
-          promise,
-          done,
-          id
-        };
-      };
-    })();
-    Scheduler = class {
-      constructor(concurrency = 2) {
-        this.concurrency = concurrency;
-        this.logger = createLogger("", "scheduler");
-        this.pending = [];
-        this.running = [];
-        this.logger(`Constructed, concurrency=%s`, concurrency);
-      }
-      schedule() {
-        if (!this.pending.length || this.running.length >= this.concurrency) {
-          this.logger(
-            `Schedule attempt ignored, pending=%s running=%s concurrency=%s`,
-            this.pending.length,
-            this.running.length,
-            this.concurrency
-          );
-          return;
-        }
-        const task = append(this.running, this.pending.shift());
-        this.logger(`Attempting id=%s`, task.id);
-        task.done(() => {
-          this.logger(`Completing id=`, task.id);
-          remove(this.running, task);
-          this.schedule();
-        });
-      }
-      next() {
-        const { promise, id } = append(this.pending, createScheduledTask());
-        this.logger(`Scheduling id=%s`, id);
-        this.schedule();
-        return promise;
-      }
-    };
-  }
-});
-
-// src/lib/tasks/apply-patch.ts
-var apply_patch_exports = {};
-__export(apply_patch_exports, {
-  applyPatchTask: () => applyPatchTask
-});
-function applyPatchTask(patches, customArgs) {
-  return straightThroughStringTask(["apply", ...customArgs, ...patches]);
-}
-var init_apply_patch = __esm({
-  "src/lib/tasks/apply-patch.ts"() {
-    "use strict";
-    init_task();
-  }
-});
-
-// src/lib/responses/BranchDeleteSummary.ts
-function branchDeletionSuccess(branch, hash) {
-  return {
-    branch,
-    hash,
-    success: true
-  };
-}
-function branchDeletionFailure(branch) {
-  return {
-    branch,
-    hash: null,
-    success: false
-  };
-}
-var BranchDeletionBatch;
-var init_BranchDeleteSummary = __esm({
-  "src/lib/responses/BranchDeleteSummary.ts"() {
-    "use strict";
-    BranchDeletionBatch = class {
-      constructor() {
-        this.all = [];
-        this.branches = {};
-        this.errors = [];
-      }
-      get success() {
-        return !this.errors.length;
-      }
-    };
-  }
-});
-
-// src/lib/parsers/parse-branch-delete.ts
-function hasBranchDeletionError(data, processExitCode) {
-  return processExitCode === 1 /* ERROR */ && deleteErrorRegex.test(data);
-}
-var deleteSuccessRegex, deleteErrorRegex, parsers8, parseBranchDeletions;
-var init_parse_branch_delete = __esm({
-  "src/lib/parsers/parse-branch-delete.ts"() {
-    "use strict";
-    init_BranchDeleteSummary();
-    init_utils();
-    deleteSuccessRegex = /(\S+)\s+\(\S+\s([^)]+)\)/;
-    deleteErrorRegex = /^error[^']+'([^']+)'/m;
-    parsers8 = [
-      new LineParser(deleteSuccessRegex, (result, [branch, hash]) => {
-        const deletion = branchDeletionSuccess(branch, hash);
-        result.all.push(deletion);
-        result.branches[branch] = deletion;
-      }),
-      new LineParser(deleteErrorRegex, (result, [branch]) => {
-        const deletion = branchDeletionFailure(branch);
-        result.errors.push(deletion);
-        result.all.push(deletion);
-        result.branches[branch] = deletion;
-      })
-    ];
-    parseBranchDeletions = (stdOut, stdErr) => {
-      return parseStringResponse(new BranchDeletionBatch(), parsers8, [stdOut, stdErr]);
-    };
-  }
-});
-
-// src/lib/responses/BranchSummary.ts
-var BranchSummaryResult;
-var init_BranchSummary = __esm({
-  "src/lib/responses/BranchSummary.ts"() {
-    "use strict";
-    BranchSummaryResult = class {
-      constructor() {
-        this.all = [];
-        this.branches = {};
-        this.current = "";
-        this.detached = false;
-      }
-      push(status, detached, name, commit, label) {
-        if (status === "*" /* CURRENT */) {
-          this.detached = detached;
-          this.current = name;
-        }
-        this.all.push(name);
-        this.branches[name] = {
-          current: status === "*" /* CURRENT */,
-          linkedWorkTree: status === "+" /* LINKED */,
-          name,
-          commit,
-          label
-        };
-      }
-    };
-  }
-});
-
-// src/lib/parsers/parse-branch.ts
-function branchStatus(input) {
-  return input ? input.charAt(0) : "";
-}
-function parseBranchSummary(stdOut, currentOnly = false) {
-  return parseStringResponse(
-    new BranchSummaryResult(),
-    currentOnly ? [currentBranchParser] : parsers9,
-    stdOut
-  );
-}
-var parsers9, currentBranchParser;
-var init_parse_branch = __esm({
-  "src/lib/parsers/parse-branch.ts"() {
-    "use strict";
-    init_BranchSummary();
-    init_utils();
-    parsers9 = [
-      new LineParser(
-        /^([*+]\s)?\((?:HEAD )?detached (?:from|at) (\S+)\)\s+([a-z0-9]+)\s(.*)$/,
-        (result, [current, name, commit, label]) => {
-          result.push(branchStatus(current), true, name, commit, label);
-        }
-      ),
-      new LineParser(
-        /^([*+]\s)?(\S+)\s+([a-z0-9]+)\s?(.*)$/s,
-        (result, [current, name, commit, label]) => {
-          result.push(branchStatus(current), false, name, commit, label);
-        }
-      )
-    ];
-    currentBranchParser = new LineParser(/^(\S+)$/s, (result, [name]) => {
-      result.push("*" /* CURRENT */, false, name, "", "");
+  _runTask(e, n) {
+    const r = this._executor.chain(), s = r.push(e);
+    return n && Ln(e, s, n), Object.create(this, {
+      then: { value: s.then.bind(s) },
+      catch: { value: s.catch.bind(s) },
+      _executor: { value: r }
     });
   }
-});
-
-// src/lib/tasks/branch.ts
-var branch_exports = {};
-__export(branch_exports, {
-  branchLocalTask: () => branchLocalTask,
-  branchTask: () => branchTask,
-  containsDeleteBranchCommand: () => containsDeleteBranchCommand,
-  deleteBranchTask: () => deleteBranchTask,
-  deleteBranchesTask: () => deleteBranchesTask
-});
-function containsDeleteBranchCommand(commands) {
-  const deleteCommands = ["-d", "-D", "--delete"];
-  return commands.some((command) => deleteCommands.includes(command));
+  add(e) {
+    return this._runTask(
+      g(["add", ...v(e)]),
+      u(arguments)
+    );
+  }
+  cwd(e) {
+    const n = u(arguments);
+    return typeof e == "string" ? this._runTask(St(e, this._executor), n) : typeof e?.path == "string" ? this._runTask(
+      St(
+        e.path,
+        e.root && this._executor || void 0
+      ),
+      n
+    ) : this._runTask(
+      dist_b("Git.cwd: workingDirectory must be supplied as a string"),
+      n
+    );
+  }
+  hashObject(e, n) {
+    return this._runTask(
+      Vn(e, n === !0),
+      u(arguments)
+    );
+  }
+  init(e) {
+    return this._runTask(
+      Zn(e === !0, this._executor.cwd, dist_h(arguments)),
+      u(arguments)
+    );
+  }
+  merge() {
+    return this._runTask(
+      At(dist_h(arguments)),
+      u(arguments)
+    );
+  }
+  mergeFromTo(e, n) {
+    return m(e) && m(n) ? this._runTask(
+      At([e, n, ...dist_h(arguments)]),
+      u(arguments, !1)
+    ) : this._runTask(
+      dist_b(
+        "Git.mergeFromTo requires that the 'remote' and 'branch' arguments are supplied as strings"
+      )
+    );
+  }
+  outputHandler(e) {
+    return this._executor.outputHandler = e, this;
+  }
+  push() {
+    const e = ce(
+      {
+        remote: d(arguments[0], m),
+        branch: d(arguments[1], m)
+      },
+      dist_h(arguments)
+    );
+    return this._runTask(e, u(arguments));
+  }
+  stash() {
+    return this._runTask(
+      g(["stash", ...dist_h(arguments)]),
+      u(arguments)
+    );
+  }
+  status() {
+    return this._runTask(
+      zr(dist_h(arguments)),
+      u(arguments)
+    );
+  }
 }
-function branchTask(customArgs) {
-  const isDelete = containsDeleteBranchCommand(customArgs);
-  const isCurrentOnly = customArgs.includes("--show-current");
-  const commands = ["branch", ...customArgs];
-  if (commands.length === 1) {
-    commands.push("-a");
+Object.assign(
+  le.prototype,
+  jn(),
+  In(),
+  zn(),
+  Tn(),
+  Hn(),
+  Kn(),
+  On(),
+  er(),
+  pr(),
+  Dr(),
+  Wr()
+);
+const Vr = /* @__PURE__ */ (() => {
+  let t = 0;
+  return () => {
+    t++;
+    const { promise: e, done: n } = (0,promise_deferred_dist/* createDeferred */.ud)();
+    return {
+      promise: e,
+      done: n,
+      id: t
+    };
+  };
+})();
+class Xr {
+  constructor(e = 2) {
+    this.concurrency = e, this.logger = dist_$("", "scheduler"), this.pending = [], this.running = [], this.logger("Constructed, concurrency=%s", e);
   }
-  if (!commands.includes("-v")) {
-    commands.splice(1, 0, "-v");
+  schedule() {
+    if (!this.pending.length || this.running.length >= this.concurrency) {
+      this.logger(
+        "Schedule attempt ignored, pending=%s running=%s concurrency=%s",
+        this.pending.length,
+        this.running.length,
+        this.concurrency
+      );
+      return;
+    }
+    const e = dist_S(this.running, this.pending.shift());
+    this.logger("Attempting id=%s", e.id), e.done(() => {
+      this.logger("Completing id=", e.id), ct(this.running, e), this.schedule();
+    });
   }
+  next() {
+    const { promise: e, id: n } = dist_S(this.pending, Vr());
+    return this.logger("Scheduling id=%s", n), this.schedule(), e;
+  }
+}
+function Yr(t, e) {
+  return g(["apply", ...e, ...t]);
+}
+var he = /* @__PURE__ */ ((t) => (t.CURRENT = "*", t.LINKED = "+", t))(he || {});
+class Qr {
+  constructor() {
+    this.all = [], this.branches = {}, this.current = "", this.detached = !1;
+  }
+  push(e, n, r, s, o) {
+    e === "*" && (this.detached = n, this.current = r), this.all.push(r), this.branches[r] = {
+      current: e === "*",
+      linkedWorkTree: e === "+",
+      name: r,
+      commit: s,
+      label: o
+    };
+  }
+}
+const Jr = [
+  new dist_l(
+    /^([*+]\s)?\((?:HEAD )?detached (?:from|at) (\S+)\)\s+([a-z0-9]+)\s(.*)$/,
+    (t, [e, n, r, s]) => {
+      t.push(Nt(e), !0, n, r, s);
+    }
+  ),
+  new dist_l(
+    /^([*+]\s)?(\S+)\s+([a-z0-9]+)\s?(.*)$/s,
+    (t, [e, n, r, s]) => {
+      t.push(Nt(e), !1, n, r, s);
+    }
+  )
+], Zr = new dist_l(/^(\S+)$/s, (t, [e]) => {
+  t.push(he.CURRENT, !1, e, "", "");
+});
+function Nt(t) {
+  return t ? t.charAt(0) : "";
+}
+function me(t, e = !1) {
+  return dist_E(
+    new Qr(),
+    e ? [Zr] : Jr,
+    t
+  );
+}
+class ts {
+  constructor() {
+    this.all = [], this.branches = {}, this.errors = [];
+  }
+  get success() {
+    return !this.errors.length;
+  }
+}
+function es(t, e) {
   return {
+    branch: t,
+    hash: e,
+    success: !0
+  };
+}
+function ns(t) {
+  return {
+    branch: t,
+    hash: null,
+    success: !1
+  };
+}
+const rs = /(\S+)\s+\(\S+\s([^)]+)\)/, pe = /^error[^']+'([^']+)'/m, ss = [
+  new dist_l(rs, (t, [e, n]) => {
+    const r = es(e, n);
+    t.all.push(r), t.branches[e] = r;
+  }),
+  new dist_l(pe, (t, [e]) => {
+    const n = ns(e);
+    t.errors.push(n), t.all.push(n), t.branches[e] = n;
+  })
+], gt = (t, e) => dist_E(new ts(), ss, [t, e]);
+function de(t, e) {
+  return e === dist_V.ERROR && pe.test(t);
+}
+function os(t) {
+  const e = ["-d", "-D", "--delete"];
+  return t.some((n) => e.includes(n));
+}
+function is(t) {
+  const e = os(t), n = t.includes("--show-current"), r = ["branch", ...t];
+  return r.length === 1 && r.push("-a"), r.includes("-v") || r.splice(1, 0, "-v"), {
     format: "utf-8",
-    commands,
-    parser(stdOut, stdErr) {
-      if (isDelete) {
-        return parseBranchDeletions(stdOut, stdErr).all[0];
-      }
-      return parseBranchSummary(stdOut, isCurrentOnly);
+    commands: r,
+    parser(s, o) {
+      return e ? gt(s, o).all[0] : me(s, n);
     }
   };
 }
-function branchLocalTask() {
+function as() {
   return {
     format: "utf-8",
     commands: ["branch", "-v"],
-    parser(stdOut) {
-      return parseBranchSummary(stdOut);
+    parser(t) {
+      return me(t);
     }
   };
 }
-function deleteBranchesTask(branches, forceDelete = false) {
+function us(t, e = !1) {
   return {
     format: "utf-8",
-    commands: ["branch", "-v", forceDelete ? "-D" : "-d", ...branches],
-    parser(stdOut, stdErr) {
-      return parseBranchDeletions(stdOut, stdErr);
+    commands: ["branch", "-v", e ? "-D" : "-d", ...t],
+    parser(n, r) {
+      return gt(n, r);
     },
-    onError({ exitCode, stdOut }, error, done, fail) {
-      if (!hasBranchDeletionError(String(error), exitCode)) {
-        return fail(error);
-      }
-      done(stdOut);
+    onError({ exitCode: n, stdOut: r }, s, o, i) {
+      if (!de(String(s), n))
+        return i(s);
+      o(r);
     }
   };
 }
-function deleteBranchTask(branch, forceDelete = false) {
-  const task = {
+function cs(t, e = !1) {
+  const n = {
     format: "utf-8",
-    commands: ["branch", "-v", forceDelete ? "-D" : "-d", branch],
-    parser(stdOut, stdErr) {
-      return parseBranchDeletions(stdOut, stdErr).branches[branch];
+    commands: ["branch", "-v", e ? "-D" : "-d", t],
+    parser(r, s) {
+      return gt(r, s).branches[t];
     },
-    onError({ exitCode, stdErr, stdOut }, error, _, fail) {
-      if (!hasBranchDeletionError(String(error), exitCode)) {
-        return fail(error);
-      }
-      throw new GitResponseError(
-        task.parser(bufferToString(stdOut), bufferToString(stdErr)),
-        String(error)
+    onError({ exitCode: r, stdErr: s, stdOut: o }, i, a, c) {
+      if (!de(String(i), r))
+        return c(i);
+      throw new at(
+        n.parser(dist_F(o), dist_F(s)),
+        String(i)
       );
     }
   };
-  return task;
+  return n;
 }
-var init_branch = __esm({
-  "src/lib/tasks/branch.ts"() {
-    "use strict";
-    init_git_response_error();
-    init_parse_branch_delete();
-    init_parse_branch();
-    init_utils();
-  }
-});
-
-// src/lib/responses/CheckIgnore.ts
-
-function toPath(input) {
-  const path = input.trim().replace(/^["']|["']$/g, "");
-  return path && (0,external_node_path_namespaceObject.normalize)(path);
-}
-var parseCheckIgnore;
-var init_CheckIgnore = __esm({
-  "src/lib/responses/CheckIgnore.ts"() {
-    "use strict";
-    parseCheckIgnore = (text) => {
-      return text.split(/\n/g).map(toPath).filter(Boolean);
-    };
-  }
-});
-
-// src/lib/tasks/check-ignore.ts
-var check_ignore_exports = {};
-__export(check_ignore_exports, {
-  checkIgnoreTask: () => checkIgnoreTask
-});
-function checkIgnoreTask(paths) {
+function dist_fs(t) {
   return {
-    commands: ["check-ignore", ...paths],
+    commands: ["check-ignore", ...t],
     format: "utf-8",
-    parser: parseCheckIgnore
+    parser: ls
   };
 }
-var init_check_ignore = __esm({
-  "src/lib/tasks/check-ignore.ts"() {
-    "use strict";
-    init_CheckIgnore();
-  }
-});
-
-// src/lib/parsers/parse-fetch.ts
-function parseFetchResult(stdOut, stdErr) {
-  const result = {
-    raw: stdOut,
+function ls(t) {
+  return t.split(/\n/g).map(hs).filter(Boolean);
+}
+function hs(t) {
+  const e = t.trim().replace(/^["']|["']$/g, "");
+  return e && (0,external_node_path_namespaceObject.normalize)(e);
+}
+const ms = [
+  new dist_l(/From (.+)$/, (t, [e]) => {
+    t.remote = e;
+  }),
+  new dist_l(/\* \[new branch]\s+(\S+)\s*-> (.+)$/, (t, [e, n]) => {
+    t.branches.push({
+      name: e,
+      tracking: n
+    });
+  }),
+  new dist_l(/\* \[new tag]\s+(\S+)\s*-> (.+)$/, (t, [e, n]) => {
+    t.tags.push({
+      name: e,
+      tracking: n
+    });
+  }),
+  new dist_l(/- \[deleted]\s+\S+\s*-> (.+)$/, (t, [e]) => {
+    t.deleted.push({
+      tracking: e
+    });
+  }),
+  new dist_l(
+    /\s*([^.]+)\.\.(\S+)\s+(\S+)\s*-> (.+)$/,
+    (t, [e, n, r, s]) => {
+      t.updated.push({
+        name: r,
+        tracking: s,
+        to: n,
+        from: e
+      });
+    }
+  )
+];
+function ps(t, e) {
+  return dist_E({
+    raw: t,
     remote: null,
     branches: [],
     tags: [],
     updated: [],
     deleted: []
-  };
-  return parseStringResponse(result, parsers10, [stdOut, stdErr]);
+  }, ms, [t, e]);
 }
-var parsers10;
-var init_parse_fetch = __esm({
-  "src/lib/parsers/parse-fetch.ts"() {
-    "use strict";
-    init_utils();
-    parsers10 = [
-      new LineParser(/From (.+)$/, (result, [remote]) => {
-        result.remote = remote;
-      }),
-      new LineParser(/\* \[new branch]\s+(\S+)\s*-> (.+)$/, (result, [name, tracking]) => {
-        result.branches.push({
-          name,
-          tracking
-        });
-      }),
-      new LineParser(/\* \[new tag]\s+(\S+)\s*-> (.+)$/, (result, [name, tracking]) => {
-        result.tags.push({
-          name,
-          tracking
-        });
-      }),
-      new LineParser(/- \[deleted]\s+\S+\s*-> (.+)$/, (result, [tracking]) => {
-        result.deleted.push({
-          tracking
-        });
-      }),
-      new LineParser(
-        /\s*([^.]+)\.\.(\S+)\s+(\S+)\s*-> (.+)$/,
-        (result, [from, to, name, tracking]) => {
-          result.updated.push({
-            name,
-            tracking,
-            to,
-            from
-          });
-        }
-      )
-    ];
-  }
-});
-
-// src/lib/tasks/fetch.ts
-var fetch_exports = {};
-__export(fetch_exports, {
-  fetchTask: () => fetchTask
-});
-function disallowedCommand(command) {
-  return /^--upload-pack(=|$)/.test(command);
+function ds(t) {
+  return /^--upload-pack(=|$)/.test(t);
 }
-function fetchTask(remote, branch, customArgs) {
-  const commands = ["fetch", ...customArgs];
-  if (remote && branch) {
-    commands.push(remote, branch);
-  }
-  const banned = commands.find(disallowedCommand);
-  if (banned) {
-    return configurationErrorTask(`git.fetch: potential exploit argument blocked.`);
-  }
-  return {
-    commands,
+function gs(t, e, n) {
+  const r = ["fetch", ...n];
+  return t && e && r.push(t, e), r.find(ds) ? dist_b("git.fetch: potential exploit argument blocked.") : {
+    commands: r,
     format: "utf-8",
-    parser: parseFetchResult
+    parser: ps
   };
 }
-var init_fetch = __esm({
-  "src/lib/tasks/fetch.ts"() {
-    "use strict";
-    init_parse_fetch();
-    init_task();
-  }
-});
-
-// src/lib/parsers/parse-move.ts
-function parseMoveResult(stdOut) {
-  return parseStringResponse({ moves: [] }, parsers11, stdOut);
+const ys = [
+  new dist_l(/^Renaming (.+) to (.+)$/, (t, [e, n]) => {
+    t.moves.push({ from: e, to: n });
+  })
+];
+function ws(t) {
+  return dist_E({ moves: [] }, ys, t);
 }
-var parsers11;
-var init_parse_move = __esm({
-  "src/lib/parsers/parse-move.ts"() {
-    "use strict";
-    init_utils();
-    parsers11 = [
-      new LineParser(/^Renaming (.+) to (.+)$/, (result, [from, to]) => {
-        result.moves.push({ from, to });
-      })
-    ];
-  }
-});
-
-// src/lib/tasks/move.ts
-var move_exports = {};
-__export(move_exports, {
-  moveTask: () => moveTask
-});
-function moveTask(from, to) {
+function bs(t, e) {
   return {
-    commands: ["mv", "-v", ...asArray(from), to],
+    commands: ["mv", "-v", ...v(t), e],
     format: "utf-8",
-    parser: parseMoveResult
+    parser: ws
   };
 }
-var init_move = __esm({
-  "src/lib/tasks/move.ts"() {
-    "use strict";
-    init_parse_move();
-    init_utils();
-  }
-});
-
-// src/lib/tasks/pull.ts
-var pull_exports = {};
-__export(pull_exports, {
-  pullTask: () => pullTask
-});
-function pullTask(remote, branch, customArgs) {
-  const commands = ["pull", ...customArgs];
-  if (remote && branch) {
-    commands.splice(1, 0, remote, branch);
-  }
-  return {
-    commands,
+function Ts(t, e, n) {
+  const r = ["pull", ...n];
+  return t && e && r.splice(1, 0, t, e), {
+    commands: r,
     format: "utf-8",
-    parser(stdOut, stdErr) {
-      return parsePullResult(stdOut, stdErr);
+    parser(s, o) {
+      return ue(s, o);
     },
-    onError(result, _error, _done, fail) {
-      const pullError = parsePullErrorResult(
-        bufferToString(result.stdOut),
-        bufferToString(result.stdErr)
+    onError(s, o, i, a) {
+      const c = Rr(
+        dist_F(s.stdOut),
+        dist_F(s.stdErr)
       );
-      if (pullError) {
-        return fail(new GitResponseError(pullError));
-      }
-      fail(_error);
+      if (c)
+        return a(new at(c));
+      a(o);
     }
   };
 }
-var init_pull = __esm({
-  "src/lib/tasks/pull.ts"() {
-    "use strict";
-    init_git_response_error();
-    init_parse_pull();
-    init_utils();
-  }
-});
-
-// src/lib/responses/GetRemoteSummary.ts
-function parseGetRemotes(text) {
-  const remotes = {};
-  forEach(text, ([name]) => remotes[name] = { name });
-  return Object.values(remotes);
+function ks(t) {
+  const e = {};
+  return ge(t, ([n]) => e[n] = { name: n }), Object.values(e);
 }
-function parseGetRemotesVerbose(text) {
-  const remotes = {};
-  forEach(text, ([name, url, purpose]) => {
-    if (!Object.hasOwn(remotes, name)) {
-      remotes[name] = {
-        name,
-        refs: { fetch: "", push: "" }
-      };
-    }
-    if (purpose && url) {
-      remotes[name].refs[purpose.replace(/[^a-z]/g, "")] = url;
-    }
-  });
-  return Object.values(remotes);
+function _s(t) {
+  const e = {};
+  return ge(t, ([n, r, s]) => {
+    Object.hasOwn(e, n) || (e[n] = {
+      name: n,
+      refs: { fetch: "", push: "" }
+    }), s && r && (e[n].refs[s.replace(/[^a-z]/g, "")] = r);
+  }), Object.values(e);
 }
-function forEach(text, handler) {
-  forEachLineWithContent(text, (line) => handler(line.split(/\s+/)));
+function ge(t, e) {
+  ut(t, (n) => e(n.split(/\s+/)));
 }
-var init_GetRemoteSummary = __esm({
-  "src/lib/responses/GetRemoteSummary.ts"() {
-    "use strict";
-    init_utils();
-  }
-});
-
-// src/lib/tasks/remote.ts
-var remote_exports = {};
-__export(remote_exports, {
-  addRemoteTask: () => addRemoteTask,
-  getRemotesTask: () => getRemotesTask,
-  listRemotesTask: () => listRemotesTask,
-  remoteTask: () => remoteTask,
-  removeRemoteTask: () => removeRemoteTask
-});
-function addRemoteTask(remoteName, remoteRepo, customArgs) {
-  return straightThroughStringTask(["remote", "add", ...customArgs, remoteName, remoteRepo]);
+function vs(t, e, n) {
+  return g(["remote", "add", ...n, t, e]);
 }
-function getRemotesTask(verbose) {
-  const commands = ["remote"];
-  if (verbose) {
-    commands.push("-v");
-  }
-  return {
-    commands,
+function Es(t) {
+  const e = ["remote"];
+  return t && e.push("-v"), {
+    commands: e,
     format: "utf-8",
-    parser: verbose ? parseGetRemotesVerbose : parseGetRemotes
+    parser: t ? _s : ks
   };
 }
-function listRemotesTask(customArgs) {
-  const commands = [...customArgs];
-  if (commands[0] !== "ls-remote") {
-    commands.unshift("ls-remote");
-  }
-  return straightThroughStringTask(commands);
+function Ss(t) {
+  const e = [...t];
+  return e[0] !== "ls-remote" && e.unshift("ls-remote"), g(e);
 }
-function remoteTask(customArgs) {
-  const commands = [...customArgs];
-  if (commands[0] !== "remote") {
-    commands.unshift("remote");
-  }
-  return straightThroughStringTask(commands);
+function Rs(t) {
+  const e = [...t];
+  return e[0] !== "remote" && e.unshift("remote"), g(e);
 }
-function removeRemoteTask(remoteName) {
-  return straightThroughStringTask(["remote", "remove", remoteName]);
+function Os(t) {
+  return g(["remote", "remove", t]);
 }
-var init_remote = __esm({
-  "src/lib/tasks/remote.ts"() {
-    "use strict";
-    init_GetRemoteSummary();
-    init_task();
-  }
-});
-
-// src/lib/tasks/stash-list.ts
-var stash_list_exports = {};
-__export(stash_list_exports, {
-  stashListTask: () => stashListTask
-});
-function stashListTask(opt = {}, customArgs) {
-  const options = parseLogOptions(opt);
-  const commands = ["stash", "list", ...options.commands, ...customArgs];
-  const parser4 = createListLogSummaryParser(
-    options.splitter,
-    options.fields,
-    logFormatFromCommand(commands)
+function Cs(t = {}, e) {
+  const n = dist_oe(t), r = ["stash", "list", ...n.commands, ...e], s = re(
+    n.splitter,
+    n.fields,
+    pt(r)
   );
-  return validateLogFormatConfig(commands) || {
-    commands,
+  return dt(r) || {
+    commands: r,
     format: "utf-8",
-    parser: parser4
+    parser: s
   };
 }
-var init_stash_list = __esm({
-  "src/lib/tasks/stash-list.ts"() {
-    "use strict";
-    init_log_format();
-    init_parse_list_log_summary();
-    init_diff();
-    init_log();
+function As(t, e) {
+  return dist_X(["add", t, e]);
+}
+function xs(t) {
+  return dist_X(["init", ...t]);
+}
+function dist_X(t) {
+  const e = [...t];
+  return e[0] !== "submodule" && e.unshift("submodule"), g(e);
+}
+function Ns(t) {
+  return dist_X(["update", ...t]);
+}
+class $s {
+  constructor(e, n) {
+    this.all = e, this.latest = n;
   }
-});
-
-// src/lib/tasks/sub-module.ts
-var sub_module_exports = {};
-__export(sub_module_exports, {
-  addSubModuleTask: () => addSubModuleTask,
-  initSubModuleTask: () => initSubModuleTask,
-  subModuleTask: () => subModuleTask,
-  updateSubModuleTask: () => updateSubModuleTask
-});
-function addSubModuleTask(repo, path) {
-  return subModuleTask(["add", repo, path]);
 }
-function initSubModuleTask(customArgs) {
-  return subModuleTask(["init", ...customArgs]);
+const Ps = function(t, e = !1) {
+  const n = t.split(`
+`).map(Ds).filter(Boolean);
+  e || n.sort(function(s, o) {
+    const i = s.split("."), a = o.split(".");
+    if (i.length === 1 || a.length === 1)
+      return Ms(dist_B(i[0]), dist_B(a[0]));
+    for (let c = 0, y = Math.max(i.length, a.length); c < y; c++) {
+      const w = ye(dist_B(i[c]), dist_B(a[c]));
+      if (w)
+        return w;
+    }
+    return 0;
+  });
+  const r = e ? n[0] : [...n].reverse().find((s) => s.indexOf(".") >= 0);
+  return new $s(n, r);
+};
+function Ms(t, e) {
+  const n = Number.isNaN(t), r = Number.isNaN(e);
+  return n !== r ? n ? 1 : -1 : n ? ye(t, e) : 0;
 }
-function subModuleTask(customArgs) {
-  const commands = [...customArgs];
-  if (commands[0] !== "submodule") {
-    commands.unshift("submodule");
-  }
-  return straightThroughStringTask(commands);
+function ye(t, e) {
+  return t === e ? 0 : t > e ? 1 : -1;
 }
-function updateSubModuleTask(customArgs) {
-  return subModuleTask(["update", ...customArgs]);
+function Ds(t) {
+  return t.trim();
 }
-var init_sub_module = __esm({
-  "src/lib/tasks/sub-module.ts"() {
-    "use strict";
-    init_task();
-  }
-});
-
-// src/lib/responses/TagList.ts
-function singleSorted(a, b) {
-  const aIsNum = Number.isNaN(a);
-  const bIsNum = Number.isNaN(b);
-  if (aIsNum !== bIsNum) {
-    return aIsNum ? 1 : -1;
-  }
-  return aIsNum ? sorted(a, b) : 0;
+function dist_B(t) {
+  return typeof t == "string" && parseInt(t.replace(/^\D+/g, ""), 10) || 0;
 }
-function sorted(a, b) {
-  return a === b ? 0 : a > b ? 1 : -1;
-}
-function trimmed(input) {
-  return input.trim();
-}
-function toNumber(input) {
-  if (typeof input === "string") {
-    return parseInt(input.replace(/^\D+/g, ""), 10) || 0;
-  }
-  return 0;
-}
-var TagList, parseTagList;
-var init_TagList = __esm({
-  "src/lib/responses/TagList.ts"() {
-    "use strict";
-    TagList = class {
-      constructor(all, latest) {
-        this.all = all;
-        this.latest = latest;
-      }
-    };
-    parseTagList = function(data, customSort = false) {
-      const tags = data.split("\n").map(trimmed).filter(Boolean);
-      if (!customSort) {
-        tags.sort(function(tagA, tagB) {
-          const partsA = tagA.split(".");
-          const partsB = tagB.split(".");
-          if (partsA.length === 1 || partsB.length === 1) {
-            return singleSorted(toNumber(partsA[0]), toNumber(partsB[0]));
-          }
-          for (let i = 0, l = Math.max(partsA.length, partsB.length); i < l; i++) {
-            const diff = sorted(toNumber(partsA[i]), toNumber(partsB[i]));
-            if (diff) {
-              return diff;
-            }
-          }
-          return 0;
-        });
-      }
-      const latest = customSort ? tags[0] : [...tags].reverse().find((tag) => tag.indexOf(".") >= 0);
-      return new TagList(tags, latest);
-    };
-  }
-});
-
-// src/lib/tasks/tag.ts
-var tag_exports = {};
-__export(tag_exports, {
-  addAnnotatedTagTask: () => addAnnotatedTagTask,
-  addTagTask: () => addTagTask,
-  tagListTask: () => tagListTask
-});
-function tagListTask(customArgs = []) {
-  const hasCustomSort = customArgs.some((option) => /^--sort=/.test(option));
+function Ls(t = []) {
+  const e = t.some((n) => /^--sort=/.test(n));
   return {
     format: "utf-8",
-    commands: ["tag", "-l", ...customArgs],
-    parser(text) {
-      return parseTagList(text, hasCustomSort);
+    commands: ["tag", "-l", ...t],
+    parser(n) {
+      return Ps(n, e);
     }
   };
 }
-function addTagTask(name) {
+function js(t) {
   return {
     format: "utf-8",
-    commands: ["tag", name],
+    commands: ["tag", t],
     parser() {
-      return { name };
+      return { name: t };
     }
   };
 }
-function addAnnotatedTagTask(name, tagMessage) {
+function Bs(t, e) {
   return {
     format: "utf-8",
-    commands: ["tag", "-a", "-m", tagMessage, name],
+    commands: ["tag", "-a", "-m", e, t],
     parser() {
-      return { name };
+      return { name: t };
     }
   };
 }
-var init_tag = __esm({
-  "src/lib/tasks/tag.ts"() {
-    "use strict";
-    init_TagList();
-  }
-});
-
-// src/git.js
-var require_git = __commonJS({
-  "src/git.js"(exports, module) {
-    "use strict";
-    var { GitExecutor: GitExecutor2 } = (init_git_executor(), __toCommonJS(git_executor_exports));
-    var { SimpleGitApi: SimpleGitApi2 } = (init_simple_git_api(), __toCommonJS(simple_git_api_exports));
-    var { Scheduler: Scheduler2 } = (init_scheduler(), __toCommonJS(scheduler_exports));
-    var { adhocExecTask: adhocExecTask2, configurationErrorTask: configurationErrorTask2 } = (init_task(), __toCommonJS(task_exports));
-    var {
-      asArray: asArray2,
-      filterArray: filterArray2,
-      filterPrimitives: filterPrimitives2,
-      filterString: filterString2,
-      filterStringOrStringArray: filterStringOrStringArray2,
-      filterType: filterType2,
-      getTrailingOptions: getTrailingOptions2,
-      trailingFunctionArgument: trailingFunctionArgument2,
-      trailingOptionsArgument: trailingOptionsArgument2
-    } = (init_utils(), __toCommonJS(utils_exports));
-    var { applyPatchTask: applyPatchTask2 } = (init_apply_patch(), __toCommonJS(apply_patch_exports));
-    var {
-      branchTask: branchTask2,
-      branchLocalTask: branchLocalTask2,
-      deleteBranchesTask: deleteBranchesTask2,
-      deleteBranchTask: deleteBranchTask2
-    } = (init_branch(), __toCommonJS(branch_exports));
-    var { checkIgnoreTask: checkIgnoreTask2 } = (init_check_ignore(), __toCommonJS(check_ignore_exports));
-    var { checkIsRepoTask: checkIsRepoTask2 } = (init_check_is_repo(), __toCommonJS(check_is_repo_exports));
-    var { cleanWithOptionsTask: cleanWithOptionsTask2, isCleanOptionsArray: isCleanOptionsArray2 } = (init_clean(), __toCommonJS(clean_exports));
-    var { diffSummaryTask: diffSummaryTask2 } = (init_diff(), __toCommonJS(diff_exports));
-    var { fetchTask: fetchTask2 } = (init_fetch(), __toCommonJS(fetch_exports));
-    var { moveTask: moveTask2 } = (init_move(), __toCommonJS(move_exports));
-    var { pullTask: pullTask2 } = (init_pull(), __toCommonJS(pull_exports));
-    var { pushTagsTask: pushTagsTask2 } = (init_push(), __toCommonJS(push_exports));
-    var {
-      addRemoteTask: addRemoteTask2,
-      getRemotesTask: getRemotesTask2,
-      listRemotesTask: listRemotesTask2,
-      remoteTask: remoteTask2,
-      removeRemoteTask: removeRemoteTask2
-    } = (init_remote(), __toCommonJS(remote_exports));
-    var { getResetMode: getResetMode2, resetTask: resetTask2 } = (init_reset(), __toCommonJS(reset_exports));
-    var { stashListTask: stashListTask2 } = (init_stash_list(), __toCommonJS(stash_list_exports));
-    var {
-      addSubModuleTask: addSubModuleTask2,
-      initSubModuleTask: initSubModuleTask2,
-      subModuleTask: subModuleTask2,
-      updateSubModuleTask: updateSubModuleTask2
-    } = (init_sub_module(), __toCommonJS(sub_module_exports));
-    var { addAnnotatedTagTask: addAnnotatedTagTask2, addTagTask: addTagTask2, tagListTask: tagListTask2 } = (init_tag(), __toCommonJS(tag_exports));
-    var { straightThroughBufferTask: straightThroughBufferTask2, straightThroughStringTask: straightThroughStringTask2 } = (init_task(), __toCommonJS(task_exports));
-    function Git2(options, plugins) {
-      this._plugins = plugins;
-      this._executor = new GitExecutor2(
-        options.baseDir,
-        new Scheduler2(options.maxConcurrentProcesses),
-        plugins
-      );
-      this._trimmed = options.trimmed;
+function dist_f(t, e) {
+  this._plugins = e, this._executor = new Dn(
+    t.baseDir,
+    new Xr(t.maxConcurrentProcesses),
+    e
+  ), this._trimmed = t.trimmed;
+}
+(dist_f.prototype = Object.create(le.prototype)).constructor = dist_f;
+dist_f.prototype.customBinary = function(t) {
+  return this._plugins.reconfigure("binary", t), this;
+};
+dist_f.prototype.env = function(t, e) {
+  return arguments.length === 1 && typeof t == "object" ? this._executor.env = t : (this._executor.env = this._executor.env || {})[t] = e, this;
+};
+dist_f.prototype.stashList = function(t) {
+  return this._runTask(
+    Cs(
+      ht(arguments) || {},
+      dist_K(t) && t || []
+    ),
+    u(arguments)
+  );
+};
+dist_f.prototype.mv = function(t, e) {
+  return this._runTask(bs(t, e), u(arguments));
+};
+dist_f.prototype.checkoutLatestTag = function(t) {
+  var e = this;
+  return this.pull(function() {
+    e.tags(function(n, r) {
+      e.checkout(r.latest, t);
+    });
+  });
+};
+dist_f.prototype.pull = function(t, e, n, r) {
+  return this._runTask(
+    Ts(
+      d(t, m),
+      d(e, m),
+      dist_h(arguments)
+    ),
+    u(arguments)
+  );
+};
+dist_f.prototype.fetch = function(t, e) {
+  return this._runTask(
+    gs(
+      d(t, m),
+      d(e, m),
+      dist_h(arguments)
+    ),
+    u(arguments)
+  );
+};
+dist_f.prototype.tags = function(t, e) {
+  return this._runTask(
+    Ls(dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.rebase = function() {
+  return this._runTask(
+    g(["rebase", ...dist_h(arguments)]),
+    u(arguments)
+  );
+};
+dist_f.prototype.reset = function(t) {
+  return this._runTask(
+    An(xn(t), dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.revert = function(t) {
+  const e = u(arguments);
+  return typeof t != "string" ? this._runTask(dist_b("Commit must be a string"), e) : this._runTask(
+    g(["revert", ...dist_h(arguments, 0, !0), t]),
+    e
+  );
+};
+dist_f.prototype.addTag = function(t) {
+  const e = typeof t == "string" ? js(t) : dist_b("Git.addTag requires a tag name");
+  return this._runTask(e, u(arguments));
+};
+dist_f.prototype.addAnnotatedTag = function(t, e) {
+  return this._runTask(
+    Bs(t, e),
+    u(arguments)
+  );
+};
+dist_f.prototype.deleteLocalBranch = function(t, e, n) {
+  return this._runTask(
+    cs(t, typeof e == "boolean" ? e : !1),
+    u(arguments)
+  );
+};
+dist_f.prototype.deleteLocalBranches = function(t, e, n) {
+  return this._runTask(
+    us(t, typeof e == "boolean" ? e : !1),
+    u(arguments)
+  );
+};
+dist_f.prototype.branch = function(t, e) {
+  return this._runTask(
+    is(dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.branchLocal = function(t) {
+  return this._runTask(as(), u(arguments));
+};
+dist_f.prototype.raw = function(t) {
+  const e = !Array.isArray(t), n = [].slice.call(e ? arguments : t, 0);
+  for (let s = 0; s < n.length && e; s++)
+    if (!st(n[s])) {
+      n.splice(s, n.length - s);
+      break;
     }
-    (Git2.prototype = Object.create(SimpleGitApi2.prototype)).constructor = Git2;
-    Git2.prototype.customBinary = function(command) {
-      this._plugins.reconfigure("binary", command);
-      return this;
-    };
-    Git2.prototype.env = function(name, value) {
-      if (arguments.length === 1 && typeof name === "object") {
-        this._executor.env = name;
-      } else {
-        (this._executor.env = this._executor.env || {})[name] = value;
+  n.push(...dist_h(arguments, 0, !0));
+  var r = u(arguments);
+  return n.length ? this._runTask(g(n, this._trimmed), r) : this._runTask(
+    dist_b("Raw: must supply one or more command to execute"),
+    r
+  );
+};
+dist_f.prototype.submoduleAdd = function(t, e, n) {
+  return this._runTask(As(t, e), u(arguments));
+};
+dist_f.prototype.submoduleUpdate = function(t, e) {
+  return this._runTask(
+    Ns(dist_h(arguments, !0)),
+    u(arguments)
+  );
+};
+dist_f.prototype.submoduleInit = function(t, e) {
+  return this._runTask(
+    xs(dist_h(arguments, !0)),
+    u(arguments)
+  );
+};
+dist_f.prototype.subModule = function(t, e) {
+  return this._runTask(
+    dist_X(dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.listRemote = function() {
+  return this._runTask(
+    Ss(dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.addRemote = function(t, e, n) {
+  return this._runTask(
+    vs(t, e, dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.removeRemote = function(t, e) {
+  return this._runTask(Os(t), u(arguments));
+};
+dist_f.prototype.getRemotes = function(t, e) {
+  return this._runTask(Es(t === !0), u(arguments));
+};
+dist_f.prototype.remote = function(t, e) {
+  return this._runTask(
+    Rs(dist_h(arguments)),
+    u(arguments)
+  );
+};
+dist_f.prototype.tag = function(t, e) {
+  const n = dist_h(arguments);
+  return n[0] !== "tag" && n.unshift("tag"), this._runTask(g(n), u(arguments));
+};
+dist_f.prototype.updateServerInfo = function(t) {
+  return this._runTask(
+    g(["update-server-info"]),
+    u(arguments)
+  );
+};
+dist_f.prototype.pushTags = function(t, e) {
+  const n = Mr(
+    { remote: d(t, m) },
+    dist_h(arguments)
+  );
+  return this._runTask(n, u(arguments));
+};
+dist_f.prototype.rm = function(t) {
+  return this._runTask(
+    g(["rm", "-f", ...v(t)]),
+    u(arguments)
+  );
+};
+dist_f.prototype.rmKeepLocal = function(t) {
+  return this._runTask(
+    g(["rm", "--cached", ...v(t)]),
+    u(arguments)
+  );
+};
+dist_f.prototype.catFile = function(t, e) {
+  return this._catFile("utf-8", arguments);
+};
+dist_f.prototype.binaryCatFile = function() {
+  return this._catFile("buffer", arguments);
+};
+dist_f.prototype._catFile = function(t, e) {
+  var n = u(e), r = ["cat-file"], s = e[0];
+  if (typeof s == "string")
+    return this._runTask(
+      dist_b("Git.catFile: options must be supplied as an array of strings"),
+      n
+    );
+  Array.isArray(s) && r.push.apply(r, s);
+  const o = t === "buffer" ? Gt(r) : g(r);
+  return this._runTask(o, n);
+};
+dist_f.prototype.diff = function(t, e) {
+  const n = m(t) ? dist_b(
+    "git.diff: supplying options as a single string is no longer supported, switch to an array of strings"
+  ) : g(["diff", ...dist_h(arguments)]);
+  return this._runTask(n, u(arguments));
+};
+dist_f.prototype.diffSummary = function() {
+  return this._runTask(
+    fr(dist_h(arguments, 1)),
+    u(arguments)
+  );
+};
+dist_f.prototype.applyPatch = function(t) {
+  const e = dist_G(t) ? Yr(v(t), dist_h([].slice.call(arguments, 1))) : dist_b(
+    "git.applyPatch requires one or more string patches as the first argument"
+  );
+  return this._runTask(e, u(arguments));
+};
+dist_f.prototype.revparse = function() {
+  const t = ["rev-parse", ...dist_h(arguments, !0)];
+  return this._runTask(
+    g(t, !0),
+    u(arguments)
+  );
+};
+dist_f.prototype.clean = function(t, e, n) {
+  const r = un(t), s = r && t.join("") || d(t, m) || "", o = dist_h([].slice.call(arguments, r ? 1 : 0));
+  return this._runTask(
+    on(s, o),
+    u(arguments)
+  );
+};
+dist_f.prototype.exec = function(t) {
+  const e = {
+    commands: [],
+    format: "utf-8",
+    parser() {
+      typeof t == "function" && t();
+    }
+  };
+  return this._runTask(e);
+};
+dist_f.prototype.checkIgnore = function(t, e) {
+  return this._runTask(
+    dist_fs(v(d(t, dist_G, []))),
+    u(arguments)
+  );
+};
+dist_f.prototype.checkIsRepo = function(t, e) {
+  return this._runTask(
+    We(d(t, m)),
+    u(arguments)
+  );
+};
+function Is(t) {
+  return t ? [{
+    type: "spawn.before",
+    action(r, s) {
+      t.aborted && s.kill(new dist_A(void 0, "abort", "Abort already signaled"));
+    }
+  }, {
+    type: "spawn.after",
+    action(r, s) {
+      function o() {
+        s.kill(new dist_A(void 0, "abort", "Abort signal received"));
       }
-      return this;
-    };
-    Git2.prototype.stashList = function(options) {
-      return this._runTask(
-        stashListTask2(
-          trailingOptionsArgument2(arguments) || {},
-          filterArray2(options) && options || []
-        ),
-        trailingFunctionArgument2(arguments)
+      t.addEventListener("abort", o), s.spawned.on("close", () => t.removeEventListener("abort", o));
+    }
+  }] : void 0;
+}
+const Us = dist_$("", "plugin:allowEnvironment");
+function Fs(t, e = !1) {
+  const n = new Set(t.map((r) => r.toLowerCase().trim()));
+  return {
+    type: "spawn.options",
+    action(r, s) {
+      const o = { ...r.env ?? process.env }, i = new Set(
+        Object.keys(s.env).map((a) => a.toLowerCase().trim())
       );
-    };
-    Git2.prototype.mv = function(from, to) {
-      return this._runTask(moveTask2(from, to), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.checkoutLatestTag = function(then) {
-      var git = this;
-      return this.pull(function() {
-        git.tags(function(err, tags) {
-          git.checkout(tags.latest, then);
-        });
-      });
-    };
-    Git2.prototype.pull = function(remote, branch, options, then) {
-      return this._runTask(
-        pullTask2(
-          filterType2(remote, filterString2),
-          filterType2(branch, filterString2),
-          getTrailingOptions2(arguments)
-        ),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.fetch = function(remote, branch) {
-      return this._runTask(
-        fetchTask2(
-          filterType2(remote, filterString2),
-          filterType2(branch, filterString2),
-          getTrailingOptions2(arguments)
-        ),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.silent = function(silence) {
-      return this._runTask(
-        adhocExecTask2(
-          () => console.warn(
-            "simple-git deprecation notice: git.silent: logging should be configured using the `debug` library / `DEBUG` environment variable, this method will be removed."
-          )
-        )
-      );
-    };
-    Git2.prototype.tags = function(options, then) {
-      return this._runTask(
-        tagListTask2(getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.rebase = function() {
-      return this._runTask(
-        straightThroughStringTask2(["rebase", ...getTrailingOptions2(arguments)]),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.reset = function(mode) {
-      return this._runTask(
-        resetTask2(getResetMode2(mode), getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.revert = function(commit) {
-      const next = trailingFunctionArgument2(arguments);
-      if (typeof commit !== "string") {
-        return this._runTask(configurationErrorTask2("Commit must be a string"), next);
-      }
-      return this._runTask(
-        straightThroughStringTask2(["revert", ...getTrailingOptions2(arguments, 0, true), commit]),
-        next
-      );
-    };
-    Git2.prototype.addTag = function(name) {
-      const task = typeof name === "string" ? addTagTask2(name) : configurationErrorTask2("Git.addTag requires a tag name");
-      return this._runTask(task, trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.addAnnotatedTag = function(tagName, tagMessage) {
-      return this._runTask(
-        addAnnotatedTagTask2(tagName, tagMessage),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.deleteLocalBranch = function(branchName, forceDelete, then) {
-      return this._runTask(
-        deleteBranchTask2(branchName, typeof forceDelete === "boolean" ? forceDelete : false),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.deleteLocalBranches = function(branchNames, forceDelete, then) {
-      return this._runTask(
-        deleteBranchesTask2(branchNames, typeof forceDelete === "boolean" ? forceDelete : false),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.branch = function(options, then) {
-      return this._runTask(
-        branchTask2(getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.branchLocal = function(then) {
-      return this._runTask(branchLocalTask2(), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.raw = function(commands) {
-      const createRestCommands = !Array.isArray(commands);
-      const command = [].slice.call(createRestCommands ? arguments : commands, 0);
-      for (let i = 0; i < command.length && createRestCommands; i++) {
-        if (!filterPrimitives2(command[i])) {
-          command.splice(i, command.length - i);
-          break;
+      for (const a of Object.keys(o)) {
+        const c = a.toLowerCase().trim();
+        if (!(!Gs(c) || n.has(c))) {
+          if (i.has(c))
+            throw new dist_A(
+              void 0,
+              "allowEnvironment",
+              `Use of "${a}" is blocked by the environment guard - add it to the allowEnvironment option to permit it`
+            );
+          Us("removing ambient guarded environment variable %s", a), delete o[a];
         }
       }
-      command.push(...getTrailingOptions2(arguments, 0, true));
-      var next = trailingFunctionArgument2(arguments);
-      if (!command.length) {
-        return this._runTask(
-          configurationErrorTask2("Raw: must supply one or more command to execute"),
-          next
-        );
-      }
-      return this._runTask(straightThroughStringTask2(command, this._trimmed), next);
-    };
-    Git2.prototype.submoduleAdd = function(repo, path, then) {
-      return this._runTask(addSubModuleTask2(repo, path), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.submoduleUpdate = function(args, then) {
-      return this._runTask(
-        updateSubModuleTask2(getTrailingOptions2(arguments, true)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.submoduleInit = function(args, then) {
-      return this._runTask(
-        initSubModuleTask2(getTrailingOptions2(arguments, true)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.subModule = function(options, then) {
-      return this._runTask(
-        subModuleTask2(getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.listRemote = function() {
-      return this._runTask(
-        listRemotesTask2(getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.addRemote = function(remoteName, remoteRepo, then) {
-      return this._runTask(
-        addRemoteTask2(remoteName, remoteRepo, getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.removeRemote = function(remoteName, then) {
-      return this._runTask(removeRemoteTask2(remoteName), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.getRemotes = function(verbose, then) {
-      return this._runTask(getRemotesTask2(verbose === true), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.remote = function(options, then) {
-      return this._runTask(
-        remoteTask2(getTrailingOptions2(arguments)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.tag = function(options, then) {
-      const command = getTrailingOptions2(arguments);
-      if (command[0] !== "tag") {
-        command.unshift("tag");
-      }
-      return this._runTask(straightThroughStringTask2(command), trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.updateServerInfo = function(then) {
-      return this._runTask(
-        straightThroughStringTask2(["update-server-info"]),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.pushTags = function(remote, then) {
-      const task = pushTagsTask2(
-        { remote: filterType2(remote, filterString2) },
-        getTrailingOptions2(arguments)
-      );
-      return this._runTask(task, trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.rm = function(files) {
-      return this._runTask(
-        straightThroughStringTask2(["rm", "-f", ...asArray2(files)]),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.rmKeepLocal = function(files) {
-      return this._runTask(
-        straightThroughStringTask2(["rm", "--cached", ...asArray2(files)]),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.catFile = function(options, then) {
-      return this._catFile("utf-8", arguments);
-    };
-    Git2.prototype.binaryCatFile = function() {
-      return this._catFile("buffer", arguments);
-    };
-    Git2.prototype._catFile = function(format, args) {
-      var handler = trailingFunctionArgument2(args);
-      var command = ["cat-file"];
-      var options = args[0];
-      if (typeof options === "string") {
-        return this._runTask(
-          configurationErrorTask2("Git.catFile: options must be supplied as an array of strings"),
-          handler
-        );
-      }
-      if (Array.isArray(options)) {
-        command.push.apply(command, options);
-      }
-      const task = format === "buffer" ? straightThroughBufferTask2(command) : straightThroughStringTask2(command);
-      return this._runTask(task, handler);
-    };
-    Git2.prototype.diff = function(options, then) {
-      const task = filterString2(options) ? configurationErrorTask2(
-        "git.diff: supplying options as a single string is no longer supported, switch to an array of strings"
-      ) : straightThroughStringTask2(["diff", ...getTrailingOptions2(arguments)]);
-      return this._runTask(task, trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.diffSummary = function() {
-      return this._runTask(
-        diffSummaryTask2(getTrailingOptions2(arguments, 1)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.applyPatch = function(patches) {
-      const task = !filterStringOrStringArray2(patches) ? configurationErrorTask2(
-        `git.applyPatch requires one or more string patches as the first argument`
-      ) : applyPatchTask2(asArray2(patches), getTrailingOptions2([].slice.call(arguments, 1)));
-      return this._runTask(task, trailingFunctionArgument2(arguments));
-    };
-    Git2.prototype.revparse = function() {
-      const commands = ["rev-parse", ...getTrailingOptions2(arguments, true)];
-      return this._runTask(
-        straightThroughStringTask2(commands, true),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.clean = function(mode, options, then) {
-      const usingCleanOptionsArray = isCleanOptionsArray2(mode);
-      const cleanMode = usingCleanOptionsArray && mode.join("") || filterType2(mode, filterString2) || "";
-      const customArgs = getTrailingOptions2([].slice.call(arguments, usingCleanOptionsArray ? 1 : 0));
-      return this._runTask(
-        cleanWithOptionsTask2(cleanMode, customArgs),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.exec = function(then) {
-      const task = {
-        commands: [],
-        format: "utf-8",
-        parser() {
-          if (typeof then === "function") {
-            then();
-          }
+      return {
+        ...r,
+        env: {
+          ...o,
+          GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS: String(!e)
         }
       };
-      return this._runTask(task);
-    };
-    Git2.prototype.clearQueue = function() {
-      return this._runTask(
-        adhocExecTask2(
-          () => console.warn(
-            "simple-git deprecation notice: clearQueue() is deprecated and will be removed, switch to using the abortPlugin instead."
-          )
-        )
-      );
-    };
-    Git2.prototype.checkIgnore = function(pathnames, then) {
-      return this._runTask(
-        checkIgnoreTask2(asArray2(filterType2(pathnames, filterStringOrStringArray2, []))),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    Git2.prototype.checkIsRepo = function(checkType, then) {
-      return this._runTask(
-        checkIsRepoTask2(filterType2(checkType, filterString2)),
-        trailingFunctionArgument2(arguments)
-      );
-    };
-    module.exports = Git2;
-  }
-});
-
-// src/lib/api.ts
-
-
-// src/lib/errors/git-construct-error.ts
-init_git_error();
-var GitConstructError = class extends GitError {
-  constructor(config, message) {
-    super(void 0, message);
-    this.config = config;
-  }
-};
-
-// src/lib/api.ts
-init_git_error();
-
-// src/lib/errors/git-plugin-error.ts
-init_git_error();
-var GitPluginError = class extends GitError {
-  constructor(task, plugin, message) {
-    super(task, message);
-    this.task = task;
-    this.plugin = plugin;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-};
-
-// src/lib/api.ts
-init_git_response_error();
-init_task_configuration_error();
-init_check_is_repo();
-init_clean();
-init_config();
-init_diff_name_status();
-init_grep();
-init_reset();
-
-// src/lib/plugins/abort-plugin.ts
-function abortPlugin(signal) {
-  if (!signal) {
-    return;
-  }
-  const onSpawnAfter = {
-    type: "spawn.after",
-    action(_data, context) {
-      function kill() {
-        context.kill(new GitPluginError(void 0, "abort", "Abort signal received"));
-      }
-      signal.addEventListener("abort", kill);
-      context.spawned.on("close", () => signal.removeEventListener("abort", kill));
     }
   };
-  const onSpawnBefore = {
-    type: "spawn.before",
-    action(_data, context) {
-      if (signal.aborted) {
-        context.kill(new GitPluginError(void 0, "abort", "Abort already signaled"));
-      }
-    }
-  };
-  return [onSpawnBefore, onSpawnAfter];
 }
-
-// src/lib/plugins/block-unsafe-operations-plugin.ts
-
-function blockUnsafeOperationsPlugin(options = {}) {
+function Gs(t) {
+  const e = t.toLowerCase().trim();
+  return e.startsWith("git_") || _(e);
+}
+function zs(t = {}) {
   return {
     type: "spawn.args",
-    action(args, { env }) {
-      for (const vulnerability of ne(args, env)) {
-        if (options[vulnerability.category] !== true) {
-          throw new GitPluginError(void 0, "unsafe", vulnerability.message);
-        }
-      }
-      return args;
+    action(e, { env: n }) {
+      for (const r of oe(e, n))
+        if (t[r.category] !== !0)
+          throw new dist_A(void 0, "unsafe", r.message);
+      return e;
     }
   };
 }
-
-// src/lib/plugins/command-config-prefixing-plugin.ts
-init_utils();
-function commandConfigPrefixingPlugin(configuration) {
-  const prefix = prefixedArray(configuration, "-c");
+function qs(t) {
+  const e = U(t, "-c");
   return {
     type: "spawn.args",
-    action(data) {
-      return [...prefix, ...data];
+    action(n) {
+      return [...e, ...n];
     }
   };
 }
-
-// src/lib/plugins/completion-detection.plugin.ts
-init_utils();
-
-var never = (0,promise_deferred_dist/* deferred */.yX)().promise;
-function completionDetectionPlugin({
-  onClose = true,
-  onExit = 50
+const $t = (0,promise_deferred_dist/* deferred */.yX)().promise;
+function Ws({
+  onClose: t = !0,
+  onExit: e = 50
 } = {}) {
-  function createEvents() {
-    let exitCode = -1;
-    const events = {
+  function n() {
+    let s = -1;
+    const o = {
       close: (0,promise_deferred_dist/* deferred */.yX)(),
       closeTimeout: (0,promise_deferred_dist/* deferred */.yX)(),
       exit: (0,promise_deferred_dist/* deferred */.yX)(),
       exitTimeout: (0,promise_deferred_dist/* deferred */.yX)()
-    };
-    const result = Promise.race([
-      onClose === false ? never : events.closeTimeout.promise,
-      onExit === false ? never : events.exitTimeout.promise
+    }, i = Promise.race([
+      t === !1 ? $t : o.closeTimeout.promise,
+      e === !1 ? $t : o.exitTimeout.promise
     ]);
-    configureTimeout(onClose, events.close, events.closeTimeout);
-    configureTimeout(onExit, events.exit, events.exitTimeout);
-    return {
-      close(code) {
-        exitCode = code;
-        events.close.done();
+    return r(t, o.close, o.closeTimeout), r(e, o.exit, o.exitTimeout), {
+      close(a) {
+        s = a, o.close.done();
       },
-      exit(code) {
-        exitCode = code;
-        events.exit.done();
+      exit(a) {
+        s = a, o.exit.done();
       },
       get exitCode() {
-        return exitCode;
+        return s;
       },
-      result
+      result: i
     };
   }
-  function configureTimeout(flag, event, timeout) {
-    if (flag === false) {
-      return;
-    }
-    (flag === true ? event.promise : event.promise.then(() => delay(flag))).then(timeout.done);
+  function r(s, o, i) {
+    s !== !1 && (s === !0 ? o.promise : o.promise.then(() => wt(s))).then(i.done);
   }
   return {
     type: "spawn.after",
-    async action(_data, { spawned, close }) {
-      const events = createEvents();
-      let deferClose = true;
-      let quickClose = () => void (deferClose = false);
-      spawned.stdout?.on("data", quickClose);
-      spawned.stderr?.on("data", quickClose);
-      spawned.on("error", quickClose);
-      spawned.on("close", (code) => events.close(code));
-      spawned.on("exit", (code) => events.exit(code));
+    async action(s, { spawned: o, close: i }) {
+      const a = n();
+      let c = !0, y = () => {
+        c = !1;
+      };
+      o.stdout?.on("data", y), o.stderr?.on("data", y), o.on("error", y), o.on("close", (w) => a.close(w)), o.on("exit", (w) => a.exit(w));
       try {
-        await events.result;
-        if (deferClose) {
-          await delay(50);
-        }
-        close(events.exitCode);
-      } catch (err) {
-        close(events.exitCode, err);
+        await a.result, c && await wt(50), i(a.exitCode);
+      } catch (w) {
+        i(a.exitCode, w);
       }
     }
   };
 }
-
-// src/lib/plugins/custom-binary.plugin.ts
-init_utils();
-var WRONG_NUMBER_ERR = `Invalid value supplied for custom binary, requires a single string or an array containing either one or two strings`;
-var WRONG_CHARS_ERR = `Invalid value supplied for custom binary, restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option`;
-function isBadArgument(arg) {
-  return !arg || !/^([a-z]:)?([a-z0-9/.\\_~-]+)$/i.test(arg);
+const we = dist_$("", "plugin:binary"), Hs = "Invalid value supplied for custom binary, requires a single string or an array containing either one or two strings", Ks = "Invalid value supplied for custom binary, restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option";
+function Vs(t) {
+  return !t || !/^([a-z]:)?([a-z0-9/.\\_~-]+)$/i.test(t);
 }
-function toBinaryConfig(input, allowUnsafe) {
-  if (input.length < 1 || input.length > 2) {
-    throw new GitPluginError(void 0, "binary", WRONG_NUMBER_ERR);
-  }
-  const isBad = input.some(isBadArgument);
-  if (isBad) {
-    if (allowUnsafe) {
-      console.warn(WRONG_CHARS_ERR);
-    } else {
-      throw new GitPluginError(void 0, "binary", WRONG_CHARS_ERR);
-    }
-  }
-  const [binary, prefix] = input;
+function Pt(t, e) {
+  if (t.length < 1 || t.length > 2)
+    throw new dist_A(void 0, "binary", Hs);
+  if (t.some(Vs))
+    if (e)
+      we("permitted unsafe binary %o", t);
+    else
+      throw new dist_A(void 0, "binary", Ks);
+  const [r, s] = t;
   return {
-    binary,
-    prefix
+    binary: r,
+    prefix: s
   };
 }
-function customBinaryPlugin(plugins, input = ["git"], allowUnsafe = false) {
-  let config = toBinaryConfig(asArray(input), allowUnsafe);
-  plugins.on("binary", (input2) => {
-    config = toBinaryConfig(asArray(input2), allowUnsafe);
-  });
-  plugins.append("spawn.binary", () => {
-    return config.binary;
-  });
-  plugins.append("spawn.args", (data) => {
-    return config.prefix ? [config.prefix, ...data] : data;
-  });
+function Xs(t, e = ["git"], n = !1) {
+  let r = Pt(v(e), n);
+  t.on("binary", (s) => {
+    r = Pt(v(s), n), we.info("reconfiguring %o", r);
+  }), t.append("spawn.binary", () => r.binary), t.append("spawn.args", (s) => r.prefix ? [r.prefix, ...s] : s);
 }
-
-// src/lib/plugins/error-detection.plugin.ts
-init_git_error();
-function isTaskError(result) {
-  return !!(result.exitCode && result.stdErr.length);
+const be = {
+  DISALLOWED_ABBREVIATED: {
+    text: "disallowed abbreviated or ambiguous option",
+    solution: "Unambiguous abbreviated options blocked with unsafe.allowAbbreviatedOptions setting: {message}"
+  },
+  UNKNOWN: {
+    text: "~ unknown ~",
+    solution: void 0
+  }
+};
+function Ys(t) {
+  if (!t)
+    return "UNKNOWN";
+  for (const [e, { text: n }] of Object.entries(be))
+    if (t.startsWith(`fatal: ${n}`))
+      return e;
+  return "UNKNOWN";
 }
-function getErrorMessage(result) {
-  return Buffer.concat([...result.stdOut, ...result.stdErr]);
+class Qs extends dist_O {
+  constructor(e = "") {
+    const n = Ys(e);
+    super(void 0, be[n].solution?.replace("{message}", e) ?? e), this.reason = n;
+  }
 }
-function errorDetectionHandler(overwrite = false, isError = isTaskError, errorMessage = getErrorMessage) {
-  return (error, result) => {
-    if (!overwrite && error || !isError(result)) {
-      return error;
-    }
-    return errorMessage(result);
-  };
+function Js(t) {
+  return !!(t.exitCode && t.stdErr.length);
 }
-function errorDetectionPlugin(config) {
+function Zs(t) {
+  return Buffer.concat([...t.stdOut, ...t.stdErr]);
+}
+function to(t = !1, e = Js, n = Zs) {
+  return (r, s) => !t && r || !e(s) ? r : n(s);
+}
+function eo(t, e) {
+  return t === 128 && e.startsWith("fatal:") ? new Qs(e) : new dist_O(void 0, e);
+}
+function Mt(t) {
   return {
     type: "task.error",
-    action(data, context) {
-      const error = config(data.error, {
-        stdErr: context.stdErr,
-        stdOut: context.stdOut,
-        exitCode: context.exitCode
+    action(e, n) {
+      const r = t(e.error, {
+        stdErr: n.stdErr,
+        stdOut: n.stdOut,
+        exitCode: n.exitCode
       });
-      if (Buffer.isBuffer(error)) {
-        return { error: new GitError(void 0, error.toString("utf-8")) };
-      }
-      return {
-        error
+      return Buffer.isBuffer(r) ? {
+        error: eo(n.exitCode, r.toString("utf-8"))
+      } : {
+        error: r
       };
     }
   };
 }
-
-// src/lib/plugins/plugin-store.ts
-init_utils();
-
-var PluginStore = class {
+const nt = dist_$("", "plugin:input");
+function no(t) {
+  return {
+    type: "spawn.after",
+    action(e, { commands: n, input: r, spawned: { stdin: s } }) {
+      if (!s)
+        return;
+      const o = t?.([...n]) ?? r;
+      if (!o)
+        return nt("generated zero length content, not writing to stdin");
+      nt("writing %s bytes to stdin", Le(o)), s.on("error", (i) => {
+        i.code !== "EPIPE" && nt("[ERROR] stdin error %o", i);
+      }), s.end(o);
+    }
+  };
+}
+class ro {
   constructor() {
-    this.plugins = /* @__PURE__ */ new Set();
-    this.events = new external_node_events_.EventEmitter();
+    this.plugins = /* @__PURE__ */ new Set(), this.events = new external_node_events_.EventEmitter();
   }
-  on(type, listener) {
-    this.events.on(type, listener);
+  on(e, n) {
+    this.events.on(e, n);
   }
-  reconfigure(type, data) {
-    this.events.emit(type, data);
+  reconfigure(e, n) {
+    this.events.emit(e, n);
   }
-  append(type, action) {
-    const plugin = append(this.plugins, { type, action });
-    return () => this.plugins.delete(plugin);
+  append(e, n) {
+    const r = dist_S(this.plugins, { type: e, action: n });
+    return () => this.plugins.delete(r);
   }
-  add(plugin) {
-    const plugins = [];
-    asArray(plugin).forEach((plugin2) => plugin2 && this.plugins.add(append(plugins, plugin2)));
-    return () => {
-      plugins.forEach((plugin2) => this.plugins.delete(plugin2));
+  add(e) {
+    const n = [];
+    return v(e).forEach(
+      (r) => {
+        r && this.plugins.add(dist_S(n, r));
+      }
+    ), () => {
+      n.forEach((r) => {
+        this.plugins.delete(r);
+      });
     };
   }
-  exec(type, data, context) {
-    let output = data;
-    const contextual = Object.freeze(Object.create(context));
-    for (const plugin of this.plugins) {
-      if (plugin.type === type) {
-        output = plugin.action(output, contextual);
-      }
-    }
-    return output;
+  exec(e, n, r) {
+    let s = n;
+    const o = Object.freeze(Object.create(r));
+    for (const i of this.plugins)
+      i.type === e && (s = i.action(s, o));
+    return s;
   }
-};
-
-// src/lib/plugins/progress-monitor-plugin.ts
-init_utils();
-function progressMonitorPlugin(progress) {
-  const progressCommand = "--progress";
-  const progressMethods = ["checkout", "clone", "fetch", "pull", "push"];
-  const onProgress = {
+}
+function so(t) {
+  const e = "--progress", n = ["checkout", "clone", "fetch", "pull", "push"];
+  return [{
+    type: "spawn.args",
+    action(o, i) {
+      return n.includes(i.method) ? De(o, e) : o;
+    }
+  }, {
     type: "spawn.after",
-    action(_data, context) {
-      if (!context.commands.includes(progressCommand)) {
-        return;
-      }
-      context.spawned.stderr?.on("data", (chunk) => {
-        const message = /^([\s\S]+?):\s*(\d+)% \((\d+)\/(\d+)\)/.exec(chunk.toString("utf8"));
-        if (!message) {
-          return;
-        }
-        progress({
-          method: context.method,
-          stage: progressEventStage(message[1]),
-          progress: asNumber(message[2]),
-          processed: asNumber(message[3]),
-          total: asNumber(message[4])
+    action(o, i) {
+      i.commands.includes(e) && i.spawned.stderr?.on("data", (a) => {
+        const c = /^([\s\S]+?):\s*(\d+)% \((\d+)\/(\d+)\)/.exec(a.toString("utf8"));
+        c && t({
+          method: i.method,
+          stage: oo(c[1]),
+          progress: p(c[2]),
+          processed: p(c[3]),
+          total: p(c[4])
         });
       });
     }
-  };
-  const onArgs = {
-    type: "spawn.args",
-    action(args, context) {
-      if (!progressMethods.includes(context.method)) {
-        return args;
-      }
-      return including(args, progressCommand);
-    }
-  };
-  return [onArgs, onProgress];
+  }];
 }
-function progressEventStage(input) {
-  return String(input.toLowerCase().split(" ", 1)) || "unknown";
+function oo(t) {
+  return String(t.toLowerCase().split(" ", 1)) || "unknown";
 }
-
-// src/lib/plugins/spawn-options-plugin.ts
-init_utils();
-function spawnOptionsPlugin(spawnOptions) {
-  const options = pick(spawnOptions, ["uid", "gid"]);
+function io(t) {
+  const e = je(t, ["uid", "gid"]);
   return {
     type: "spawn.options",
-    action(data) {
-      return { ...options, ...data };
+    action(n) {
+      return { ...e, ...n };
     }
   };
 }
-
-// src/lib/plugins/timout-plugin.ts
-function timeoutPlugin({
-  block,
-  stdErr = true,
-  stdOut = true
-}) {
-  if (block > 0) {
-    return {
-      type: "spawn.after",
-      action(_data, context) {
-        let timeout;
-        function wait() {
-          timeout && clearTimeout(timeout);
-          timeout = setTimeout(kill, block);
-        }
-        function stop() {
-          context.spawned.stdout?.off("data", wait);
-          context.spawned.stderr?.off("data", wait);
-          context.spawned.off("exit", stop);
-          context.spawned.off("close", stop);
-          timeout && clearTimeout(timeout);
-        }
-        function kill() {
-          stop();
-          context.kill(new GitPluginError(void 0, "timeout", `block timeout reached`));
-        }
-        stdOut && context.spawned.stdout?.on("data", wait);
-        stdErr && context.spawned.stderr?.on("data", wait);
-        context.spawned.on("exit", stop);
-        context.spawned.on("close", stop);
-        wait();
-      }
-    };
-  }
-}
-
-// src/lib/plugins/suffix-paths.plugin.ts
-
-function suffixPathsPlugin() {
+function ao() {
   return {
     type: "spawn.args",
-    action(data) {
-      const prefix = [];
-      let suffix;
-      function append2(args) {
-        (suffix = suffix || []).push(...args);
+    action(t) {
+      const e = [];
+      let n;
+      function r(s) {
+        (n = n || []).push(...s);
       }
-      for (let i = 0; i < data.length; i++) {
-        const param = data[i];
-        if (dist_r(param)) {
-          append2(dist_o(param));
+      for (let s = 0; s < t.length; s++) {
+        const o = t[s];
+        if (dist_r(o)) {
+          r(dist_o(o));
           continue;
         }
-        if (param === "--") {
-          append2(
-            data.slice(i + 1).flatMap((item) => dist_r(item) && dist_o(item) || item)
+        if (o === "--") {
+          r(
+            t.slice(s + 1).flatMap((i) => dist_r(i) && dist_o(i) || i)
           );
           break;
         }
-        prefix.push(param);
+        e.push(o);
       }
-      return !suffix ? prefix : [...prefix, "--", ...suffix.map(String)];
+      return n ? [...e, "--", ...n.map(String)] : e;
     }
   };
 }
-
-// src/lib/git-factory.ts
-init_utils();
-var Git = require_git();
-function gitInstanceFactory(baseDir, options) {
-  const plugins = new PluginStore();
-  const config = createInstanceConfig(
-    baseDir && (typeof baseDir === "string" ? { baseDir } : baseDir) || {},
-    options
-  );
-  if (!folderExists(config.baseDir)) {
-    throw new GitConstructError(
-      config,
-      `Cannot use simple-git on a directory that does not exist`
-    );
-  }
-  if (Array.isArray(config.config)) {
-    plugins.add(commandConfigPrefixingPlugin(config.config));
-  }
-  plugins.add(blockUnsafeOperationsPlugin(config.unsafe));
-  plugins.add(completionDetectionPlugin(config.completion));
-  config.abort && plugins.add(abortPlugin(config.abort));
-  config.progress && plugins.add(progressMonitorPlugin(config.progress));
-  config.timeout && plugins.add(timeoutPlugin(config.timeout));
-  config.spawnOptions && plugins.add(spawnOptionsPlugin(config.spawnOptions));
-  plugins.add(suffixPathsPlugin());
-  plugins.add(errorDetectionPlugin(errorDetectionHandler(true)));
-  config.errors && plugins.add(errorDetectionPlugin(config.errors));
-  customBinaryPlugin(plugins, config.binary, config.unsafe?.allowUnsafeCustomBinary);
-  return new Git(config, plugins);
-}
-
-// src/lib/runners/promise-wrapped.ts
-init_git_response_error();
-var functionNamesBuilderApi = (/* unused pure expression or super */ null && (["customBinary", "env", "outputHandler", "silent"]));
-var functionNamesPromiseApi = (/* unused pure expression or super */ null && ([
-  "add",
-  "addAnnotatedTag",
-  "addConfig",
-  "addRemote",
-  "addTag",
-  "applyPatch",
-  "binaryCatFile",
-  "branch",
-  "branchLocal",
-  "catFile",
-  "checkIgnore",
-  "checkIsRepo",
-  "checkout",
-  "checkoutBranch",
-  "checkoutLatestTag",
-  "checkoutLocalBranch",
-  "clean",
-  "clone",
-  "commit",
-  "cwd",
-  "deleteLocalBranch",
-  "deleteLocalBranches",
-  "diff",
-  "diffSummary",
-  "exec",
-  "fetch",
-  "getRemotes",
-  "init",
-  "listConfig",
-  "listRemote",
-  "log",
-  "merge",
-  "mergeFromTo",
-  "mirror",
-  "mv",
-  "pull",
-  "push",
-  "pushTags",
-  "raw",
-  "rebase",
-  "remote",
-  "removeRemote",
-  "reset",
-  "revert",
-  "revparse",
-  "rm",
-  "rmKeepLocal",
-  "show",
-  "stash",
-  "stashList",
-  "status",
-  "subModule",
-  "submoduleAdd",
-  "submoduleInit",
-  "submoduleUpdate",
-  "tag",
-  "tags",
-  "updateServerInfo"
-]));
-function gitP(...args) {
-  let git;
-  let chain = Promise.resolve();
-  try {
-    git = gitInstanceFactory(...args);
-  } catch (e) {
-    chain = Promise.reject(e);
-  }
-  function builderReturn() {
-    return promiseApi;
-  }
-  function chainReturn() {
-    return chain;
-  }
-  const promiseApi = [...functionNamesBuilderApi, ...functionNamesPromiseApi].reduce(
-    (api, name) => {
-      const isAsync = functionNamesPromiseApi.includes(name);
-      const valid = isAsync ? asyncWrapper(name, git) : syncWrapper(name, git, api);
-      const alternative = isAsync ? chainReturn : builderReturn;
-      Object.defineProperty(api, name, {
-        enumerable: false,
-        configurable: false,
-        value: git ? valid : alternative
-      });
-      return api;
-    },
-    {}
-  );
-  return promiseApi;
-  function asyncWrapper(fn, git2) {
-    return function(...args2) {
-      if (typeof args2[args2.length] === "function") {
-        throw new TypeError(
-          "Promise interface requires that handlers are not supplied inline, trailing function not allowed in call to " + fn
-        );
+function uo({
+  block: t,
+  stdErr: e = !0,
+  stdOut: n = !0
+}) {
+  if (t > 0)
+    return {
+      type: "spawn.after",
+      action(r, s) {
+        let o;
+        function i() {
+          o && clearTimeout(o), o = setTimeout(c, t);
+        }
+        function a() {
+          s.spawned.stdout?.off("data", i), s.spawned.stderr?.off("data", i), s.spawned.off("exit", a), s.spawned.off("close", a), o && clearTimeout(o);
+        }
+        function c() {
+          a(), s.kill(new dist_A(void 0, "timeout", "block timeout reached"));
+        }
+        n && s.spawned.stdout?.on("data", i), e && s.spawned.stderr?.on("data", i), s.spawned.on("exit", a), s.spawned.on("close", a), i();
       }
-      return chain.then(function() {
-        return new Promise(function(resolve, reject) {
-          const callback = (err, result) => {
-            if (err) {
-              return reject(toError(err));
-            }
-            resolve(result);
-          };
-          args2.push(callback);
-          git2[fn].apply(git2, args2);
-        });
-      });
     };
-  }
-  function syncWrapper(fn, git2, api) {
-    return (...args2) => {
-      git2[fn](...args2);
-      return api;
-    };
-  }
 }
-function toError(error) {
-  if (error instanceof Error) {
-    return error;
-  }
-  if (typeof error === "string") {
-    return new Error(error);
-  }
-  return new GitResponseError(error);
-}
+const wo = (t, e) => {
+  const n = new ro(), r = Ge(
+    t && (typeof t == "string" ? { baseDir: t } : t) || {},
+    e
+  );
+  if (!Lt(r.baseDir))
+    throw new Ae(
+      r,
+      "Cannot use simple-git on a directory that does not exist"
+    );
+  return Array.isArray(r.config) && n.add(qs(r.config)), n.add(zs(r.unsafe)), n.add(Ws(r.completion)), r.abort && n.add(Is(r.abort)), r.progress && n.add(so(r.progress)), r.timeout && n.add(uo(r.timeout)), r.spawnOptions && n.add(io(r.spawnOptions)), n.add(ao()), n.add(no(r.input)), n.add(Mt(to(!0))), r.errors && n.add(Mt(r.errors)), Xs(n, r.binary, r.unsafe?.allowUnsafeCustomBinary), n.add(
+    Fs(r.allowEnvironment ?? [], r.unsafe?.allowAbbreviatedOptions)
+  ), new dist_f(r, n);
+};
 
-// src/esm.mjs
-var simpleGit = gitInstanceFactory;
-var esm_default = (/* unused pure expression or super */ null && (gitInstanceFactory));
-
-//# sourceMappingURL=index.js.map
+//# sourceMappingURL=index.mjs.map
 
 ;// CONCATENATED MODULE: ./build/git/git.js
 
@@ -54726,6 +53399,7 @@ async function configureGit(git, token, gitUsername, gitUserEmail, dryRun = fals
     }
     await git.addConfig('user.email', gitUserEmail);
     await git.addConfig('user.name', gitUsername);
+    return prBranch;
 }
 async function getFileFromDefaultBranch(git, filePath, defaultBranch) {
     try {
@@ -54735,7 +53409,7 @@ async function getFileFromDefaultBranch(git, filePath, defaultBranch) {
         throw new Error(`Failed to fetch ${filePath} from default branch`);
     }
 }
-const createGit = () => simpleGit();
+const createGit = () => wo();
 
 // EXTERNAL MODULE: ./node_modules/mixin-deep/index.js
 var mixin_deep = __nccwpck_require__(6141);
@@ -55258,10 +53932,19 @@ function fetchPomPath(obj, path) {
 }
 
 ;// CONCATENATED MODULE: ./node_modules/js-yaml/dist/js-yaml.mjs
-/*! js-yaml 5.1.0 https://github.com/nodeca/js-yaml @license MIT */
+/*! js-yaml 5.5.0 https://github.com/nodeca/js-yaml @license MIT */
 //#region src/tag.ts
+/**
+* Returned by a scalar resolver when the source does not match its tag.
+*
+* @category Tags
+*/
 var NOT_RESOLVED = Symbol("NOT_RESOLVED");
-var MERGE_KEY = Symbol("MERGE_KEY");
+/**
+* Create a normalized scalar tag definition.
+*
+* @category Tags
+*/
 function defineScalarTag(tagName, options) {
 	return {
 		tagName,
@@ -55270,11 +53953,16 @@ function defineScalarTag(tagName, options) {
 		matchByTagPrefix: options.matchByTagPrefix ?? false,
 		implicitFirstChars: options.implicitFirstChars ?? null,
 		resolve: options.resolve,
-		identify: options.identify ?? null,
+		identify: options.identify,
 		represent: options.represent ?? ((data) => String(data)),
-		representTagName: options.representTagName ?? null
+		representTagName: options.representTagName ?? (() => tagName)
 	};
 }
+/**
+* Create a normalized sequence tag definition.
+*
+* @category Tags
+*/
 function defineSequenceTag(tagName, options) {
 	const carrierIsResult = options.finalize === void 0;
 	return {
@@ -55286,11 +53974,16 @@ function defineSequenceTag(tagName, options) {
 		addItem: options.addItem,
 		finalize: options.finalize ?? ((carrier) => carrier),
 		carrierIsResult,
-		identify: options.identify ?? null,
+		identify: options.identify,
 		represent: options.represent ?? ((data) => data),
-		representTagName: options.representTagName ?? null
+		representTagName: options.representTagName ?? (() => tagName)
 	};
 }
+/**
+* Create a normalized mapping tag definition.
+*
+* @category Tags
+*/
 function defineMappingTag(tagName, options) {
 	const carrierIsResult = options.finalize === void 0;
 	return {
@@ -55305,13 +53998,14 @@ function defineMappingTag(tagName, options) {
 		get: options.get,
 		finalize: options.finalize ?? ((carrier) => carrier),
 		carrierIsResult,
-		identify: options.identify ?? null,
+		identify: options.identify,
 		represent: options.represent ?? ((data) => data),
-		representTagName: options.representTagName ?? null
+		representTagName: options.representTagName ?? (() => tagName)
 	};
 }
 //#endregion
 //#region src/tag/scalar/str.ts
+/** @category Tags */
 var strTag = defineScalarTag("tag:yaml.org,2002:str", {
 	resolve: (source) => source,
 	identify: (data) => typeof data === "string"
@@ -55325,6 +54019,7 @@ var NULL_VALUES$1 = [
 	"Null",
 	"NULL"
 ];
+/** @category Tags */
 var nullCoreTag = defineScalarTag("tag:yaml.org,2002:null", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55342,6 +54037,7 @@ var nullCoreTag = defineScalarTag("tag:yaml.org,2002:null", {
 });
 //#endregion
 //#region src/tag/scalar/null_json.ts
+/** @category Tags */
 var nullJsonTag = defineScalarTag("tag:yaml.org,2002:null", {
 	implicit: true,
 	implicitFirstChars: ["n"],
@@ -55361,6 +54057,7 @@ var NULL_VALUES = [
 	"Null",
 	"NULL"
 ];
+/** @category Tags */
 var nullYaml11Tag = defineScalarTag("tag:yaml.org,2002:null", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55388,6 +54085,7 @@ var FALSE_VALUES$2 = [
 	"False",
 	"FALSE"
 ];
+/** @category Tags */
 var boolCoreTag = defineScalarTag("tag:yaml.org,2002:bool", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55408,6 +54106,7 @@ var boolCoreTag = defineScalarTag("tag:yaml.org,2002:bool", {
 //#region src/tag/scalar/bool_json.ts
 var TRUE_VALUES$1 = ["true"];
 var FALSE_VALUES$1 = ["false"];
+/** @category Tags */
 var boolJsonTag = defineScalarTag("tag:yaml.org,2002:bool", {
 	implicit: true,
 	implicitFirstChars: ["t", "f"],
@@ -55447,6 +54146,7 @@ var FALSE_VALUES = [
 	"Off",
 	"OFF"
 ];
+/** @category Tags */
 var boolYaml11Tag = defineScalarTag("tag:yaml.org,2002:bool", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55492,6 +54192,7 @@ function resolveYamlInteger$2(source, isExplicit) {
 	const result = parseYamlInteger$2(source);
 	return Number.isFinite(result) ? result : NOT_RESOLVED;
 }
+/** @category Tags */
 var intCoreTag = defineScalarTag("tag:yaml.org,2002:int", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55500,7 +54201,7 @@ var intCoreTag = defineScalarTag("tag:yaml.org,2002:int", {
 		..."0123456789"
 	],
 	resolve: resolveYamlInteger$2,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && object % 1 === 0 && !Object.is(object, -0),
+	identify: (object) => Number.isInteger(object) && !Object.is(object, -0) && object.toString(10).indexOf("e") < 0,
 	represent: (object) => object.toString(10)
 });
 //#endregion
@@ -55526,11 +54227,12 @@ function resolveYamlInteger$1(source, isExplicit) {
 	const result = parseYamlInteger$1(source);
 	return Number.isFinite(result) ? result : NOT_RESOLVED;
 }
+/** @category Tags */
 var intJsonTag = defineScalarTag("tag:yaml.org,2002:int", {
 	implicit: true,
 	implicitFirstChars: ["-", ..."0123456789"],
 	resolve: resolveYamlInteger$1,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && object % 1 === 0 && !Object.is(object, -0),
+	identify: (object) => Number.isInteger(object) && !Object.is(object, -0) && object.toString(10).indexOf("e") < 0,
 	represent: (object) => object.toString(10)
 });
 //#endregion
@@ -55558,6 +54260,7 @@ function resolveYamlInteger(source) {
 	const result = parseYamlInteger(source);
 	return Number.isFinite(result) ? result : NOT_RESOLVED;
 }
+/** @category Tags */
 var intYaml11Tag = defineScalarTag("tag:yaml.org,2002:int", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55566,7 +54269,7 @@ var intYaml11Tag = defineScalarTag("tag:yaml.org,2002:int", {
 		..."0123456789"
 	],
 	resolve: resolveYamlInteger,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && object % 1 === 0 && !Object.is(object, -0),
+	identify: (object) => Number.isInteger(object) && !Object.is(object, -0) && object.toString(10).indexOf("e") < 0,
 	represent: (object) => object.toString(10)
 });
 //#endregion
@@ -55592,6 +54295,7 @@ function representYamlFloat$2(object) {
 	const result = object.toString(10);
 	return /^[-+]?[0-9]+e/.test(result) ? result.replace("e", ".e") : result;
 }
+/** @category Tags */
 var floatCoreTag = defineScalarTag("tag:yaml.org,2002:float", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55601,7 +54305,7 @@ var floatCoreTag = defineScalarTag("tag:yaml.org,2002:float", {
 		..."0123456789"
 	],
 	resolve: resolveYamlFloat$2,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && (object % 1 !== 0 || Object.is(object, -0)),
+	identify: (object) => typeof object === "number" && (!Number.isInteger(object) || Object.is(object, -0) || object.toString(10).indexOf("e") >= 0),
 	represent: representYamlFloat$2
 });
 //#endregion
@@ -55632,11 +54336,12 @@ function representYamlFloat$1(object) {
 	const result = object.toString(10);
 	return /^[-+]?[0-9]+e/.test(result) ? result.replace("e", ".e") : result;
 }
+/** @category Tags */
 var floatJsonTag = defineScalarTag("tag:yaml.org,2002:float", {
 	implicit: true,
 	implicitFirstChars: ["-", ..."0123456789"],
 	resolve: resolveYamlFloat$1,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && (object % 1 !== 0 || Object.is(object, -0)),
+	identify: (object) => typeof object === "number" && (!Number.isInteger(object) || Object.is(object, -0) || object.toString(10).indexOf("e") >= 0),
 	represent: representYamlFloat$1
 });
 //#endregion
@@ -55666,6 +54371,7 @@ function representYamlFloat(object) {
 	const result = object.toString(10);
 	return /^[-+]?[0-9]+e/.test(result) ? result.replace("e", ".e") : result;
 }
+/** @category Tags */
 var floatYaml11Tag = defineScalarTag("tag:yaml.org,2002:float", {
 	implicit: true,
 	implicitFirstChars: [
@@ -55675,18 +54381,25 @@ var floatYaml11Tag = defineScalarTag("tag:yaml.org,2002:float", {
 		..."0123456789"
 	],
 	resolve: resolveYamlFloat,
-	identify: (object) => Object.prototype.toString.call(object) === "[object Number]" && (object % 1 !== 0 || Object.is(object, -0)),
+	identify: (object) => typeof object === "number" && (!Number.isInteger(object) || Object.is(object, -0) || object.toString(10).indexOf("e") >= 0),
 	represent: representYamlFloat
 });
 //#endregion
 //#region src/tag/scalar/merge.ts
+/**
+* Enables merge keys in {@link CORE_SCHEMA} when added with
+* {@link Schema.withTags}.
+*
+* @category Tags
+*/
 var mergeTag = defineScalarTag("tag:yaml.org,2002:merge", {
 	implicit: true,
 	implicitFirstChars: ["<"],
 	resolve: (source, isExplicit) => {
-		if (source === "<<" || isExplicit && source === "") return MERGE_KEY;
+		if (source === "<<" || isExplicit && source === "") return "<<";
 		return NOT_RESOLVED;
-	}
+	},
+	identify: () => false
 });
 //#endregion
 //#region src/tag/scalar/binary.ts
@@ -55704,6 +54417,11 @@ function representYamlBinary(object) {
 	for (let index = 0; index < object.length; index++) binary += String.fromCharCode(object[index]);
 	return btoa(binary);
 }
+/**
+* The `!!binary` tag, represented as a `Uint8Array`.
+*
+* @category Tags
+*/
 var binaryTag = defineScalarTag("tag:yaml.org,2002:binary", {
 	resolve: resolveYamlBinary,
 	identify: (object) => Object.prototype.toString.call(object) === "[object Uint8Array]",
@@ -55713,6 +54431,11 @@ var binaryTag = defineScalarTag("tag:yaml.org,2002:binary", {
 //#region src/tag/scalar/timestamp.ts
 var YAML_DATE_REGEXP = /* @__PURE__ */ new RegExp("^([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])$");
 var YAML_TIMESTAMP_REGEXP = /* @__PURE__ */ new RegExp("^([0-9][0-9][0-9][0-9])-([0-9][0-9]?)-([0-9][0-9]?)(?:[Tt]|[ \\t]+)([0-9][0-9]?):([0-9][0-9]):([0-9][0-9])(?:\\.([0-9]*))?(?:[ \\t]*(Z|([-+])([0-9][0-9]?)(?::([0-9][0-9]))?))?$");
+function makeUtcDate(year, month, day, hour = 0, minute = 0, second = 0, fraction = 0) {
+	const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+	date.setUTCFullYear(year, month, day);
+	return date;
+}
 function resolveYamlTimestamp(source) {
 	let match = YAML_DATE_REGEXP.exec(source);
 	if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(source);
@@ -55721,7 +54444,7 @@ function resolveYamlTimestamp(source) {
 	const month = +match[2] - 1;
 	const day = +match[3];
 	if (!match[4]) {
-		const date = new Date(Date.UTC(year, month, day));
+		const date = makeUtcDate(year, month, day);
 		if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return NOT_RESOLVED;
 		return date;
 	}
@@ -55735,7 +54458,7 @@ function resolveYamlTimestamp(source) {
 		while (value.length < 3) value += "0";
 		fraction = +value;
 	}
-	const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+	const date = makeUtcDate(year, month, day, hour, minute, second, fraction);
 	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return NOT_RESOLVED;
 	if (match[9]) {
 		const offsetHour = +match[10];
@@ -55746,6 +54469,11 @@ function resolveYamlTimestamp(source) {
 	}
 	return date;
 }
+/**
+* The YAML 1.1 `!!timestamp` tag, represented as a JavaScript `Date`.
+*
+* @category Tags
+*/
 var timestampTag = defineScalarTag("tag:yaml.org,2002:timestamp", {
 	implicit: true,
 	implicitFirstChars: [..."0123456789"],
@@ -55755,6 +54483,7 @@ var timestampTag = defineScalarTag("tag:yaml.org,2002:timestamp", {
 });
 //#endregion
 //#region src/tag/sequence/seq.ts
+/** @category Tags */
 var seqTag = defineSequenceTag("tag:yaml.org,2002:seq", {
 	create: () => [],
 	addItem: (container, item) => {
@@ -55763,21 +54492,88 @@ var seqTag = defineSequenceTag("tag:yaml.org,2002:seq", {
 	identify: Array.isArray
 });
 //#endregion
+//#region src/common/object.ts
+function isPlainObject(data) {
+	if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
+	const prototype = Object.getPrototypeOf(data);
+	return prototype === null || prototype === Object.prototype;
+}
+function pick(object, keys) {
+	const result = {};
+	for (const key of keys) if (object[key] !== void 0) result[key] = object[key];
+	return result;
+}
+//#endregion
 //#region src/tag/sequence/omap.ts
+/**
+* Provided only for YAML 1.1 compatibility and supported by the loader only.
+* JavaScript has no dedicated class to represent this type, so it cannot be
+* identified and dumped.
+*
+* ```yaml
+* !!omap
+*   - one: 1
+*   - two: 2
+* ```
+*
+* is loaded as
+*
+* ```javascript
+* [
+*   { one: 1 },
+*   { two: 2 }
+* ]
+* ```
+*
+* @category Tags
+*/
 var omapTag = defineSequenceTag("tag:yaml.org,2002:omap", {
-	create: () => [],
-	addItem: (container, item) => {
-		if (Object.prototype.toString.call(item) !== "[object Object]") return "cannot resolve an ordered map item";
-		const object = item;
-		const itemKeys = Object.keys(object);
-		if (itemKeys.length !== 1) return "cannot resolve an ordered map item";
-		for (const existing of container) if (Object.prototype.hasOwnProperty.call(existing, itemKeys[0])) return "cannot resolve an ordered map item";
-		container.push(object);
+	create: () => ({
+		list: [],
+		seen: /* @__PURE__ */ new Set()
+	}),
+	addItem: (carrier, item) => {
+		let key;
+		if (item instanceof Map) {
+			if (item.size !== 1) return "cannot resolve an ordered map item";
+			key = item.keys().next().value;
+		} else if (isPlainObject(item)) {
+			const itemKeys = Object.keys(item);
+			if (itemKeys.length !== 1) return "cannot resolve an ordered map item";
+			key = itemKeys[0];
+		} else return "cannot resolve an ordered map item";
+		if (carrier.seen.has(key)) return "duplicate key in ordered map";
+		carrier.seen.add(key);
+		carrier.list.push(item);
 		return "";
-	}
+	},
+	finalize: (carrier) => carrier.list,
+	identify: () => false
 });
 //#endregion
 //#region src/tag/sequence/pairs.ts
+/**
+* Provided only for YAML 1.1 compatibility and supported by the loader only.
+* JavaScript has no dedicated class to represent this type, so it cannot be
+* identified and dumped.
+*
+* ```yaml
+* !!pairs
+*   - one: 1
+*   - two: 2
+* ```
+*
+* is loaded as
+*
+* ```javascript
+* [
+*   ['one', 1],
+*   ['two', 2]
+* ]
+* ```
+*
+* @category Tags
+*/
 var pairsTag = defineSequenceTag("tag:yaml.org,2002:pairs", {
 	create: () => [],
 	addItem: (container, item) => {
@@ -55792,22 +54588,32 @@ var pairsTag = defineSequenceTag("tag:yaml.org,2002:pairs", {
 		if (keys.length !== 1) return "cannot resolve a pairs item";
 		container.push([keys[0], object[keys[0]]]);
 		return "";
-	}
+	},
+	identify: () => false
 });
 //#endregion
-//#region src/common/object.ts
-function isPlainObject(data) {
-	if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
-	const prototype = Object.getPrototypeOf(data);
-	return prototype === null || prototype === Object.prototype;
-}
-function js_yaml_pick(object, keys) {
-	const result = {};
-	for (const key of keys) if (object[key] !== void 0) result[key] = object[key];
-	return result;
-}
-//#endregion
 //#region src/tag/mapping/map.ts
+/**
+* This is the default mapping implementation. It uses `{}` objects and has only
+* partial functionality due to language limitations. This choice was made
+* because users expect to get JavaScript objects, and it was left unchanged to
+* avoid too many breaking changes in the v5 release.
+*
+* Side effects:
+*
+* - `Object.hasOwn()` checks or `for...of` loops are required for safe use (to
+*   avoid falling through to prototypes).
+* - Only scalar string keys are supported properly.
+* - Other scalar keys, such as `null` and numbers, are converted to strings.
+*   This is historical behaviour, and it can cause side effects such as
+*   problems with `!!merge`.
+*
+* Note that non-string scalar keys may be deprecated in future versions.
+*
+* Ideally, use {@link realMapTag} instead.
+*
+* @category Tags
+*/
 var mapTag = defineMappingTag("tag:yaml.org,2002:map", {
 	create: () => ({}),
 	identify: isPlainObject,
@@ -55833,10 +54639,19 @@ var mapTag = defineMappingTag("tag:yaml.org,2002:map", {
 		return Object.prototype.hasOwnProperty.call(container, String(key));
 	},
 	keys: (container) => Object.keys(container),
-	get: (container, key) => container[String(key)]
+	get: (container, key) => {
+		const normalizedKey = String(key);
+		if (!Object.prototype.hasOwnProperty.call(container, normalizedKey)) return null;
+		return container[normalizedKey];
+	}
 });
 //#endregion
 //#region src/tag/mapping/set.ts
+/**
+* The YAML 1.1 `!!set` tag, represented as a JavaScript `Set`.
+*
+* @category Tags
+*/
 var setTag = defineMappingTag("tag:yaml.org,2002:set", {
 	create: () => /* @__PURE__ */ new Set(),
 	identify: (data) => data instanceof Set,
@@ -55858,9 +54673,9 @@ var setTag = defineMappingTag("tag:yaml.org,2002:set", {
 //#region src/schema.ts
 function createTagDefinitionMap() {
 	return {
-		scalar: {},
-		sequence: {},
-		mapping: {}
+		scalar: Object.create(null),
+		sequence: Object.create(null),
+		mapping: Object.create(null)
 	};
 }
 function createTagDefinitionListMap() {
@@ -55885,13 +54700,42 @@ function compileTags(tags) {
 	}
 	return result;
 }
+/**
+* Controls tag resolution when loading and type selection when dumping.
+*
+* @category Schemas
+*/
 var Schema = class Schema {
 	tags;
+	/** @internal */
 	implicitScalarTags;
+	/**
+	* Dispatch implicit scalar resolvers by `source.charAt(0)`. Each bucket holds
+	* the resolvers that may match that key, in schema order; a key absent from
+	* the map uses
+	* {@link Schema.implicitScalarAnyFirstChar}
+	* (resolvers that declared no first-char constraint, so they apply to any
+	* first character).
+	*/
 	implicitScalarByFirstChar;
 	implicitScalarAnyFirstChar;
+	/**
+	* The default scalar tag (`!!str`), resolved once so the composer's fallback
+	* for unresolved plain scalars avoids a keyed lookup per scalar.
+	*
+	* @internal
+	*/
 	defaultScalarTag;
+	/**
+	* The default container tags (`!!seq` / `!!map`), used by the dumper: when a
+	* value is identified by its default tag, the tag is implicit and not
+	* printed. Undefined if the schema does not define them (then such values
+	* can't be dumped).
+	*
+	* @internal
+	*/
 	defaultSequenceTag;
+	/** @internal */
 	defaultMappingTag;
 	exact;
 	prefix;
@@ -55914,10 +54758,8 @@ var Schema = class Schema {
 					if (tag.matchByTagPrefix) prefix.sequence.push(tag);
 					else exact.sequence[tag.tagName] = tag;
 					break;
-				case "mapping":
-					if (tag.matchByTagPrefix) prefix.mapping.push(tag);
-					else exact.mapping[tag.tagName] = tag;
-					break;
+				case "mapping": if (tag.matchByTagPrefix) prefix.mapping.push(tag);
+				else exact.mapping[tag.tagName] = tag;
 			}
 		}
 		const implicitScalarAnyFirstChar = implicitScalarTags.filter((tag) => tag.implicitFirstChars === null);
@@ -55937,17 +54779,74 @@ var Schema = class Schema {
 		this.exact = exact;
 		this.prefix = prefix;
 	}
+	/** @internal */
+	lookupScalarTag(tagName) {
+		const exactTag = this.exact.scalar[tagName];
+		if (exactTag) return exactTag;
+		for (const tag of this.prefix.scalar) if (tagName.startsWith(tag.tagName)) return tag;
+	}
+	/** @internal */
+	lookupSequenceTag(tagName) {
+		const exactTag = this.exact.sequence[tagName];
+		if (exactTag) return exactTag;
+		for (const tag of this.prefix.sequence) if (tagName.startsWith(tag.tagName)) return tag;
+	}
+	/** @internal */
+	lookupMappingTag(tagName) {
+		const exactTag = this.exact.mapping[tagName];
+		if (exactTag) return exactTag;
+		for (const tag of this.prefix.mapping) if (tagName.startsWith(tag.tagName)) return tag;
+	}
+	/** @internal */
+	resolveImplicitScalarTag(source) {
+		const candidates = this.implicitScalarByFirstChar.get(source.charAt(0)) ?? this.implicitScalarAnyFirstChar;
+		for (const tag of candidates) {
+			const value = tag.resolve(source, false, tag.tagName);
+			if (value !== NOT_RESOLVED) return {
+				value,
+				tag
+			};
+		}
+		const tag = this.defaultScalarTag;
+		return {
+			value: tag.resolve(source, false, tag.tagName),
+			tag
+		};
+	}
+	/**
+	* Creates a new schema with the specified tags added. If a tag already
+	* exists, it is replaced by the specified tag.
+	*
+	* @example
+	*
+	* ```javascript
+	* import { CORE_SCHEMA, mergeTag, realMapTag } from 'js-yaml'
+	*
+	* const schema = CORE_SCHEMA.withTags(mergeTag, realMapTag)
+	* ```
+	*/
 	withTags(...tags) {
 		let flatTags = [];
 		for (const tag of tags) flatTags = flatTags.concat(tag);
 		return new Schema([...this.tags, ...flatTags]);
 	}
 };
+/**
+* The YAML 1.2 Failsafe Schema: strings, sequences, and mappings.
+*
+* @category Schemas
+*/
 var FAILSAFE_SCHEMA = new Schema([
 	strTag,
 	seqTag,
 	mapTag
 ]);
+/**
+* The YAML 1.2 JSON Schema. It uses JSON scalar forms while retaining YAML
+* collection syntax.
+*
+* @category Schemas
+*/
 var JSON_SCHEMA = new Schema([
 	...FAILSAFE_SCHEMA.tags,
 	nullJsonTag,
@@ -55955,6 +54854,25 @@ var JSON_SCHEMA = new Schema([
 	intJsonTag,
 	floatJsonTag
 ]);
+/**
+* The default schema for the loaders. Note, {@link CORE_SCHEMA} comes
+* without the `!!merge` tag. You can easily enable it if needed.
+*
+* @example
+* Enable {@link mergeTag}:
+*
+* ```javascript
+* import { load, CORE_SCHEMA, mergeTag } from 'js-yaml'
+*
+* try {
+*   load(data, { schema: CORE_SCHEMA.withTags(mergeTag) })
+* } catch (e) {
+*   console.error(e)
+* }
+* ```
+*
+* @category Schemas
+*/
 var CORE_SCHEMA = new Schema([
 	...FAILSAFE_SCHEMA.tags,
 	nullCoreTag,
@@ -55962,6 +54880,11 @@ var CORE_SCHEMA = new Schema([
 	intCoreTag,
 	floatCoreTag
 ]);
+/**
+* YAML 1.1-compatible schema.
+*
+* @category Schemas
+*/
 var YAML11_SCHEMA = new Schema([
 	...FAILSAFE_SCHEMA.tags,
 	nullYaml11Tag,
@@ -55975,8 +54898,60 @@ var YAML11_SCHEMA = new Schema([
 	pairsTag,
 	setTag
 ]);
+/**
+* The dumper schema for maximum compatibility. It combines all supported type
+* variants from YAML 1.1 and YAML 1.2 so strings matching any of them are
+* quoted. This makes the generated YAML more compatible with other parsers.
+*
+* The schema is based on YAML 1.1, but extends `!!int` and `!!float` to accept
+* both YAML 1.1 and Core Schema forms, since Core Schema supports some forms
+* that YAML 1.1 does not.
+*
+* @category Schemas
+*/
+var DUMP_SCHEMA = YAML11_SCHEMA.withTags({
+	...intYaml11Tag,
+	resolve: (source, isExplicit, tagName) => {
+		const result = intYaml11Tag.resolve(source, isExplicit, tagName);
+		return result === NOT_RESOLVED ? intCoreTag.resolve(source, isExplicit, tagName) : result;
+	}
+}, {
+	...floatYaml11Tag,
+	resolve: (source, isExplicit, tagName) => {
+		const result = floatYaml11Tag.resolve(source, isExplicit, tagName);
+		return result === NOT_RESOLVED ? floatCoreTag.resolve(source, isExplicit, tagName) : result;
+	}
+});
 //#endregion
 //#region src/tag/mapping/real_map.ts
+/**
+* Recommended when non-string keys are actually needed. It uses native
+* JavaScript `Map` objects, so keys keep their constructed types instead of
+* being converted to strings.
+*
+* It is not the default to avoid widespread breaking changes in existing
+* projects. `Map` has a different access API and does not pass deep equality
+* checks against `{}`-based fixtures. Alongside the other changes in v5,
+* making it the default was considered too disruptive.
+*
+* If these differences are acceptable for your project, we recommend using
+* {@link realMapTag} to guarantee the absence of problems and side effects.
+*
+* @example
+* Enable {@link realMapTag}:
+*
+* ```javascript
+* import { load, CORE_SCHEMA, realMapTag } from 'js-yaml'
+*
+* try {
+*   load(data, { schema: CORE_SCHEMA.withTags(realMapTag) })
+* } catch (e) {
+*   console.error(e)
+* }
+* ```
+*
+* @category Tags
+*/
 var realMapTag = defineMappingTag("tag:yaml.org,2002:map", {
 	create: () => /* @__PURE__ */ new Map(),
 	addPair: (container, key, value) => {
@@ -56009,6 +54984,13 @@ function normalizeKey(key) {
 	if (typeof key === "object" && Object.prototype.toString.call(key) === "[object Object]") return "[object Object]";
 	return String(key);
 }
+/**
+* This implementation exists solely to reproduce v4 behavior exactly. Its use
+* is strongly discouraged. If complex or non-string keys are needed, use
+* {@link realMapTag} instead.
+*
+* @category Tags
+*/
 var legacyMapTag = defineMappingTag("tag:yaml.org,2002:map", {
 	create: () => ({}),
 	identify: isPlainObject,
@@ -56034,7 +55016,11 @@ var legacyMapTag = defineMappingTag("tag:yaml.org,2002:map", {
 		return normalizedKey !== null && Object.prototype.hasOwnProperty.call(container, normalizedKey);
 	},
 	keys: (container) => Object.keys(container),
-	get: (container, key) => container[String(key)]
+	get: (container, key) => {
+		const normalizedKey = String(key);
+		if (!Object.prototype.hasOwnProperty.call(container, normalizedKey)) return null;
+		return container[normalizedKey];
+	}
 });
 //#endregion
 //#region src/common/snippet.ts
@@ -56109,9 +55095,19 @@ function formatError(exception, compact) {
 	if (!compact && exception.mark.snippet) where += `\n\n${exception.mark.snippet}`;
 	return `${exception.reason} ${where}`;
 }
-var YAMLException = class extends Error {
+/**
+* A YAML error. Unlike an ordinary `Error`, it adds a source snippet showing
+* the location of the problem to the error message, when available.
+*
+* @category Main
+*/
+var YAMLException = class YAMLException extends Error {
 	reason;
 	mark;
+	/**
+	* Optional `mark` contains source snippet data. Usually, use
+	* {@link YAMLException.throwAt} instead of passing it directly.
+	*/
 	constructor(reason, mark) {
 		super();
 		this.name = "YAMLException";
@@ -56120,52 +55116,71 @@ var YAMLException = class extends Error {
 		this.message = formatError(this, false);
 		if (Error.captureStackTrace) Error.captureStackTrace(this, this.constructor);
 	}
+	/**
+	* Returns the formatted error, omitting the source snippet in compact mode.
+	*/
 	toString(compact) {
 		return `${this.name}: ${formatError(this, compact)}`;
 	}
-};
-function throwErrorAt(source, position, message, filename = "") {
-	let line = 0;
-	let lineStart = 0;
-	for (let index = 0; index < position; index++) {
-		const ch = source.charCodeAt(index);
-		if (ch === 10) {
-			line++;
-			lineStart = index + 1;
-		} else if (ch === 13) {
-			line++;
-			if (source.charCodeAt(index + 1) === 10) index++;
-			lineStart = index + 1;
+	/**
+	* Builds a YAMLException with a source snippet and throws it. `source` is
+	* the raw input text; `position` is an offset into it.
+	*/
+	static throwAt(source, position, message, filename = "") {
+		let line = 0;
+		let lineStart = 0;
+		for (let index = 0; index < position; index++) {
+			const ch = source.charCodeAt(index);
+			if (ch === 10) {
+				line++;
+				lineStart = index + 1;
+			} else if (ch === 13) {
+				line++;
+				if (source.charCodeAt(index + 1) === 10) index++;
+				lineStart = index + 1;
+			}
 		}
+		const mark = {
+			name: filename,
+			buffer: source,
+			position,
+			line,
+			column: position - lineStart
+		};
+		mark.snippet = makeSnippet(mark);
+		throw new YAMLException(message, mark);
 	}
-	const mark = {
-		name: filename,
-		buffer: source,
-		position,
-		line,
-		column: position - lineStart
-	};
-	mark.snippet = makeSnippet(mark);
-	throw new YAMLException(message, mark);
-}
+};
 //#endregion
 //#region src/parser/events.ts
-var EVENT_DOCUMENT = 1;
-var EVENT_SEQUENCE = 2;
-var EVENT_MAPPING = 3;
-var EVENT_SCALAR = 4;
-var EVENT_ALIAS = 5;
-var EVENT_POP = 6;
-var SCALAR_STYLE_PLAIN = 1;
-var SCALAR_STYLE_SINGLE_QUOTED = 2;
-var SCALAR_STYLE_DOUBLE_QUOTED = 3;
-var SCALAR_STYLE_LITERAL_BLOCK = 4;
-var SCALAR_STYLE_FOLDED_BLOCK = 5;
-var COLLECTION_STYLE_BLOCK = 1;
-var COLLECTION_STYLE_FLOW = 2;
-var CHOMPING_CLIP = 1;
-var CHOMPING_STRIP = 2;
-var CHOMPING_KEEP = 3;
+/** @category Events */
+var EVENT_ID = {
+	DOCUMENT: 1,
+	SEQUENCE: 2,
+	MAPPING: 3,
+	SCALAR: 4,
+	ALIAS: 5,
+	POP: 6
+};
+/** @category Nodes */
+var SCALAR_STYLE = {
+	PLAIN: 1,
+	SINGLE_QUOTED: 2,
+	DOUBLE_QUOTED: 3,
+	LITERAL_BLOCK: 4,
+	FOLDED_BLOCK: 5
+};
+/** @category Nodes */
+var COLLECTION_STYLE = {
+	BLOCK: 1,
+	FLOW: 2
+};
+/** @category Nodes */
+var CHOMPING_MODE = {
+	CLIP: 1,
+	STRIP: 2,
+	KEEP: 3
+};
 //#endregion
 //#region src/parser/parser_scalar.ts
 var NO_RANGE$3 = -1;
@@ -56332,71 +55347,124 @@ function getBlockValue(input, start, end, indent, chomping, folded) {
 		}
 		const content = line.slice(textIndent);
 		const first = content.charCodeAt(0);
-		if (folded) if (first === 32 || first === 9) {
-			atMoreIndented = true;
-			result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
-		} else if (atMoreIndented) {
-			atMoreIndented = false;
-			result += "\n".repeat(emptyLines + 1);
-		} else if (emptyLines === 0) {
-			if (didReadContent) result += " ";
-		} else result += "\n".repeat(emptyLines);
-		else result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
+		if (folded) {
+			if (first === 32 || first === 9) {
+				atMoreIndented = true;
+				result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
+			} else if (atMoreIndented) {
+				atMoreIndented = false;
+				result += "\n".repeat(emptyLines + 1);
+			} else if (emptyLines === 0) {
+				if (didReadContent) result += " ";
+			} else result += "\n".repeat(emptyLines);
+		} else result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
 		result += content;
 		didReadContent = true;
 		emptyLines = 0;
 	}
-	if (chomping === 3) result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
-	else if (chomping !== 2) {
+	if (chomping === CHOMPING_MODE.KEEP) result += "\n".repeat(didReadContent ? 1 + emptyLines : emptyLines);
+	else if (chomping !== CHOMPING_MODE.STRIP) {
 		if (didReadContent) result += "\n";
 	}
 	return result;
 }
+/**
+* Decodes the scalar referenced by event offsets in `input`.
+*
+* @category Events
+*/
 function getScalarValue(input, scalar) {
 	if (scalar.valueStart === NO_RANGE$3) return "";
 	const { valueStart, valueEnd } = scalar;
 	if (scalar.fast) return input.slice(valueStart, valueEnd);
 	switch (scalar.style) {
-		case 2: return getSingleQuotedValue(input, valueStart, valueEnd);
-		case 3: return getDoubleQuotedValue(input, valueStart, valueEnd);
-		case 4: return getBlockValue(input, valueStart, valueEnd, scalar.indent, scalar.chomping, false);
-		case 5: return getBlockValue(input, valueStart, valueEnd, scalar.indent, scalar.chomping, true);
+		case SCALAR_STYLE.SINGLE_QUOTED: return getSingleQuotedValue(input, valueStart, valueEnd);
+		case SCALAR_STYLE.DOUBLE_QUOTED: return getDoubleQuotedValue(input, valueStart, valueEnd);
+		case SCALAR_STYLE.LITERAL_BLOCK: return getBlockValue(input, valueStart, valueEnd, scalar.indent, scalar.chomping, false);
+		case SCALAR_STYLE.FOLDED_BLOCK: return getBlockValue(input, valueStart, valueEnd, scalar.indent, scalar.chomping, true);
 		default: return getPlainValue(input, valueStart, valueEnd);
 	}
 }
 //#endregion
 //#region src/common/tagname.ts
-var DEFAULT_TAG_HANDLERS = {
+var DEFAULT_TAG_HANDLERS = Object.assign(Object.create(null), {
 	"!": "!",
 	"!!": "tag:yaml.org,2002:"
-};
-function tagPercentEncode(source) {
-	return encodeURI(source).replace(/!/g, "%21");
+});
+var TAG_SUFFIX_CHARS = "-#;/?:@&=+$_.~*'()";
+var TAG_URI_CHARS = TAG_SUFFIX_CHARS + "!,[]";
+var HEX = "0123456789ABCDEF";
+function percentByte(byte) {
+	return "%" + HEX[byte >> 4] + HEX[byte & 15];
+}
+function tagPercentEncode(source, isSuffix) {
+	const allowed = isSuffix ? TAG_SUFFIX_CHARS : TAG_URI_CHARS;
+	let result = "";
+	for (let index = 0; index < source.length; index++) {
+		let ch = source.charCodeAt(index);
+		if (ch >= 48 && ch <= 57 || ch >= 65 && ch <= 90 || ch >= 97 && ch <= 122 || allowed.includes(source[index])) {
+			result += source[index];
+			continue;
+		}
+		if (ch >= 55296 && ch <= 56319) ch = 65536 + ((ch & 1023) << 10) + (source.charCodeAt(++index) & 1023);
+		if (ch < 128) result += percentByte(ch);
+		else if (ch < 2048) result += percentByte(192 | ch >> 6) + percentByte(128 | ch & 63);
+		else if (ch < 65536) result += percentByte(224 | ch >> 12) + percentByte(128 | ch >> 6 & 63) + percentByte(128 | ch & 63);
+		else result += percentByte(240 | ch >> 18) + percentByte(128 | ch >> 12 & 63) + percentByte(128 | ch >> 6 & 63) + percentByte(128 | ch & 63);
+	}
+	return result;
+}
+function tagPercentDecode(source) {
+	let result = "";
+	let index = 0;
+	while (index < source.length) {
+		if (source.charCodeAt(index) !== 37) {
+			result += source[index++];
+			continue;
+		}
+		let ch = parseInt(source.slice(index + 1, index + 3), 16);
+		index += 3;
+		if (ch >= 192) {
+			let remaining = ch < 224 ? 1 : ch < 240 ? 2 : 3;
+			ch &= (1 << 6 - remaining) - 1;
+			while (remaining-- > 0) {
+				ch = ch << 6 | parseInt(source.slice(index + 1, index + 3), 16) & 63;
+				index += 3;
+			}
+		}
+		if (ch < 65536) result += String.fromCharCode(ch);
+		else {
+			ch -= 65536;
+			result += String.fromCharCode(55296 | ch >> 10, 56320 | ch & 1023);
+		}
+	}
+	return result;
 }
 function tagNameFull(rawTag, tagHandlers) {
-	if (rawTag.startsWith("!<") && rawTag.endsWith(">")) return decodeURIComponent(rawTag.slice(2, -1));
+	if (rawTag.startsWith("!<") && rawTag.endsWith(">")) return tagPercentDecode(rawTag.slice(2, -1));
 	const handleEnd = rawTag.indexOf("!", 1);
 	const handle = handleEnd === -1 ? "!" : rawTag.slice(0, handleEnd + 1);
-	const prefix = tagHandlers?.[handle] ?? DEFAULT_TAG_HANDLERS[handle] ?? handle;
-	return decodeURIComponent(prefix) + decodeURIComponent(rawTag.slice(handle.length));
+	return tagPercentDecode(tagHandlers?.[handle] ?? DEFAULT_TAG_HANDLERS[handle] ?? handle) + tagPercentDecode(rawTag.slice(handle.length));
 }
 function tagNameShort(fullTag) {
 	let tag = fullTag;
 	if (tag.charCodeAt(0) === 33) {
 		tag = tag.slice(1);
-		return `!${tagPercentEncode(tag)}`;
+		return `!${tagPercentEncode(tag, true)}`;
 	}
-	if (tag.slice(0, 18) === "tag:yaml.org,2002:") return `!!${tagPercentEncode(tag.slice(18))}`;
-	return `!<${tagPercentEncode(tag)}>`;
+	if (tag.slice(0, 18) === "tag:yaml.org,2002:") return `!!${tagPercentEncode(tag.slice(18), true)}`;
+	return `!<${tagPercentEncode(tag, false)}>`;
 }
 //#endregion
 //#region src/parser/constructor.ts
 var NO_RANGE$2 = -1;
+var MERGE_TAG_NAME = "tag:yaml.org,2002:merge";
 var DEFAULT_CONSTRUCTOR_OPTIONS = {
 	filename: "",
 	schema: CORE_SCHEMA,
 	json: false,
-	maxMergeSeqLength: 20
+	maxTotalMergeKeys: 1e4,
+	maxAliases: -1
 };
 function eventPosition$1(event) {
 	if ("tagStart" in event && event.tagStart !== NO_RANGE$2) return event.tagStart;
@@ -56406,25 +55474,15 @@ function eventPosition$1(event) {
 	return 0;
 }
 function throwError$1(state, message) {
-	throwErrorAt(state.source, state.position, message, state.filename);
+	YAMLException.throwAt(state.source, state.position, message, state.filename);
 }
 function finalizeCollection(state, position, tag, carrier) {
 	try {
 		return tag.finalize(carrier);
 	} catch (error) {
 		if (error instanceof YAMLException) throw error;
-		throwErrorAt(state.source, position, error instanceof Error ? error.message : String(error), state.filename);
+		YAMLException.throwAt(state.source, position, error instanceof Error ? error.message : String(error), state.filename);
 	}
-}
-function lookupTag(exact, prefix, tagName) {
-	const exactTag = exact[tagName];
-	if (exactTag) return exactTag;
-	for (const tag of prefix) if (tagName.startsWith(tag.tagName)) return tag;
-}
-function findExplicitTag(state, exact, prefix, tagName, nodeKind) {
-	const tag = lookupTag(exact, prefix, tagName);
-	if (tag) return tag;
-	throwError$1(state, `unknown ${nodeKind} tag !<${tagName}>`);
 }
 function constructScalar(state, event) {
 	const source = getScalarValue(state.source, event);
@@ -56436,7 +55494,7 @@ function constructScalar(state, event) {
 			tag: strTag
 		};
 		const tagName = tagNameFull(rawTag, state.tagHandlers);
-		const scalarTag = lookupTag(state.schema.exact.scalar, state.schema.prefix.scalar, tagName);
+		const scalarTag = state.schema.lookupScalarTag(tagName);
 		if (scalarTag) {
 			const result = scalarTag.resolve(source, true, tagName);
 			if (result === NOT_RESOLVED) throwError$1(state, `cannot resolve a node with !<${tagName}> explicit tag`);
@@ -56445,7 +55503,7 @@ function constructScalar(state, event) {
 				tag: scalarTag
 			};
 		}
-		const collectionTagDef = lookupTag(state.schema.exact.mapping, state.schema.prefix.mapping, tagName) ?? lookupTag(state.schema.exact.sequence, state.schema.prefix.sequence, tagName);
+		const collectionTagDef = state.schema.lookupMappingTag(tagName) ?? state.schema.lookupSequenceTag(tagName);
 		if (collectionTagDef) {
 			if (source !== "") throwError$1(state, `cannot resolve a node with !<${tagName}> explicit tag`);
 			const carrier = collectionTagDef.create(tagName);
@@ -56456,55 +55514,49 @@ function constructScalar(state, event) {
 		}
 		throwError$1(state, `unknown scalar tag !<${tagName}>`);
 	}
-	if (event.style === 1) {
-		const candidates = state.schema.implicitScalarByFirstChar.get(source.charAt(0)) ?? state.schema.implicitScalarAnyFirstChar;
-		for (const tag of candidates) {
-			const result = tag.resolve(source, false, tag.tagName);
-			if (result !== NOT_RESOLVED) return {
-				value: result,
-				tag
-			};
-		}
-	}
+	if (event.style === SCALAR_STYLE.PLAIN) return state.schema.resolveImplicitScalarTag(source);
 	return {
 		value: strTag.resolve(source, false, strTag.tagName),
 		tag: strTag
 	};
 }
-function collectionTag(state, event, exact, prefix, defaultTagName, nodeKind) {
+function collectionTagName(state, event, defaultTagName) {
 	const rawTag = event.tagStart === NO_RANGE$2 ? "" : state.source.slice(event.tagStart, event.tagEnd);
-	const tagName = rawTag === "" || rawTag === "!" ? defaultTagName : tagNameFull(rawTag, state.tagHandlers);
-	return {
-		tagName,
-		tag: findExplicitTag(state, exact, prefix, tagName, nodeKind)
-	};
+	return rawTag === "" || rawTag === "!" ? defaultTagName : tagNameFull(rawTag, state.tagHandlers);
 }
 function isMappingTag(tag) {
 	return tag.nodeKind === "mapping";
 }
+function chargeMergeWork(state) {
+	state.totalMergeKeys++;
+	if (state.maxTotalMergeKeys !== -1 && state.totalMergeKeys > state.maxTotalMergeKeys) throwError$1(state, `merge keys exceeded maxTotalMergeKeys (${state.maxTotalMergeKeys})`);
+}
 function mergeKeys(state, frame, source, sourceTag) {
+	chargeMergeWork(state);
 	for (const sourceKey of sourceTag.keys(source)) {
+		chargeMergeWork(state);
 		if (frame.tag.has(frame.value, sourceKey)) continue;
 		const err = frame.tag.addPair(frame.value, sourceKey, sourceTag.get(source, sourceKey));
 		if (err) throwError$1(state, err);
-		(frame.overridable ??= /* @__PURE__ */ new Set()).add(sourceKey);
+		frame.overridable ??= /* @__PURE__ */ new Set();
+		frame.overridable.add(sourceKey);
 	}
 }
 function mergeSource(state, frame, source, sourceTag) {
 	state.position = frame.keyPosition;
 	if (isMappingTag(sourceTag)) mergeKeys(state, frame, source, sourceTag);
 	else if (sourceTag.nodeKind === "sequence" && Array.isArray(source)) {
-		const seen = /* @__PURE__ */ new Set();
+		if (source.length > 100) throwError$1(state, "abnormal merge sequence size");
 		for (const element of source) {
-			if (seen.has(element)) continue;
-			seen.add(element);
-			mergeKeys(state, frame, element, frame.tag);
+			const elementTag = state.nodeTags.get(element);
+			if (!elementTag) throwError$1(state, "cannot merge mappings; the provided source object is unacceptable");
+			mergeKeys(state, frame, element, elementTag);
 		}
 	} else throwError$1(state, "cannot merge mappings; the provided source object is unacceptable");
 }
 function addMappingValue(state, frame, key, value, tag) {
 	state.position = frame.keyPosition;
-	if (key === MERGE_KEY) {
+	if (frame.keyIsMerge) {
 		mergeSource(state, frame, value, tag);
 		return;
 	}
@@ -56519,10 +55571,7 @@ function addValue(state, value, tag) {
 		frame.value = value;
 		frame.hasValue = true;
 	} else if (frame.kind === "sequence") {
-		if (frame.merge) {
-			if (!isMappingTag(tag)) throwError$1(state, "cannot merge mappings; the provided source object is unacceptable");
-			if (frame.index >= state.maxMergeSeqLength) throwError$1(state, `merge sequence length exceeded maxMergeSeqLength (${state.maxMergeSeqLength})`);
-		}
+		if (isMappingTag(tag)) state.nodeTags.set(value, tag);
 		const err = frame.tag.addItem(frame.value, value, frame.index++);
 		if (err) throwError$1(state, err);
 	} else if (frame.hasKey) {
@@ -56534,6 +55583,7 @@ function addValue(state, value, tag) {
 		frame.key = value;
 		frame.keyPosition = state.position;
 		frame.hasKey = true;
+		frame.keyIsMerge = tag.tagName === MERGE_TAG_NAME;
 	}
 }
 function storeAnchor(state, event, value, tag, isValueFinal) {
@@ -56548,6 +55598,12 @@ function storeAnchor(state, event, value, tag, isValueFinal) {
 	}
 	return null;
 }
+/**
+* Constructs JavaScript documents directly from parser events, without an
+* intermediate AST.
+*
+* @category Events
+*/
 function constructFromEvents(events, options) {
 	const state = {
 		...DEFAULT_CONSTRUCTOR_OPTIONS,
@@ -56558,14 +55614,19 @@ function constructFromEvents(events, options) {
 		position: 0,
 		frames: [],
 		anchors: /* @__PURE__ */ new Map(),
-		tagHandlers: Object.create(null)
+		nodeTags: /* @__PURE__ */ new Map(),
+		tagHandlers: Object.create(null),
+		totalMergeKeys: 0,
+		aliasCount: 0
 	};
 	while (state.eventIndex < state.events.length) {
 		const event = state.events[state.eventIndex++];
 		state.position = eventPosition$1(event);
 		switch (event.type) {
-			case 1:
+			case EVENT_ID.DOCUMENT:
 				state.anchors = /* @__PURE__ */ new Map();
+				state.nodeTags = /* @__PURE__ */ new Map();
+				state.aliasCount = 0;
 				state.tagHandlers = Object.create(null);
 				for (const directive of event.directives) if (directive.kind === "tag") state.tagHandlers[directive.handle] = directive.prefix;
 				state.frames.push({
@@ -56575,47 +55636,50 @@ function constructFromEvents(events, options) {
 					hasValue: false
 				});
 				break;
-			case 4: {
+			case EVENT_ID.SCALAR: {
 				const { value, tag } = constructScalar(state, event);
 				storeAnchor(state, event, value, tag, true);
 				addValue(state, value, tag);
 				break;
 			}
-			case 2: {
-				const definition = collectionTag(state, event, state.schema.exact.sequence, state.schema.prefix.sequence, "tag:yaml.org,2002:seq", "sequence");
-				const value = definition.tag.create(definition.tagName);
-				const anchor = storeAnchor(state, event, value, definition.tag, definition.tag.carrierIsResult);
-				const parent = state.frames[state.frames.length - 1];
-				const merge = parent !== void 0 && parent.kind === "mapping" && parent.hasKey && parent.key === MERGE_KEY;
+			case EVENT_ID.SEQUENCE: {
+				const tagName = collectionTagName(state, event, "tag:yaml.org,2002:seq");
+				const tag = state.schema.lookupSequenceTag(tagName);
+				if (!tag) throwError$1(state, `unknown sequence tag !<${tagName}>`);
+				const value = tag.create(tagName);
+				const anchor = storeAnchor(state, event, value, tag, tag.carrierIsResult);
 				state.frames.push({
 					kind: "sequence",
 					position: state.position,
 					value,
-					tag: definition.tag,
+					tag,
 					anchor,
-					index: 0,
-					merge
+					index: 0
 				});
 				break;
 			}
-			case 3: {
-				const definition = collectionTag(state, event, state.schema.exact.mapping, state.schema.prefix.mapping, "tag:yaml.org,2002:map", "mapping");
-				const value = definition.tag.create(definition.tagName);
-				const anchor = storeAnchor(state, event, value, definition.tag, definition.tag.carrierIsResult);
+			case EVENT_ID.MAPPING: {
+				const tagName = collectionTagName(state, event, "tag:yaml.org,2002:map");
+				const tag = state.schema.lookupMappingTag(tagName);
+				if (!tag) throwError$1(state, `unknown mapping tag !<${tagName}>`);
+				const value = tag.create(tagName);
+				const anchor = storeAnchor(state, event, value, tag, tag.carrierIsResult);
 				state.frames.push({
 					kind: "mapping",
 					position: state.position,
 					value,
-					tag: definition.tag,
+					tag,
 					anchor,
 					key: void 0,
 					keyPosition: state.position,
 					hasKey: false,
+					keyIsMerge: false,
 					overridable: null
 				});
 				break;
 			}
-			case 5: {
+			case EVENT_ID.ALIAS: {
+				if (state.maxAliases !== -1 && ++state.aliasCount > state.maxAliases) throwError$1(state, `aliases exceeded maxAliases (${state.maxAliases})`);
 				const name = state.source.slice(event.anchorStart, event.anchorEnd);
 				const anchor = state.anchors.get(name);
 				if (!anchor) throwError$1(state, `unidentified alias "${name}"`);
@@ -56623,8 +55687,12 @@ function constructFromEvents(events, options) {
 				addValue(state, anchor.value, anchor.tag);
 				break;
 			}
-			case 6: {
+			case EVENT_ID.POP: {
 				const frame = state.frames.pop();
+				if (frame.kind === "mapping" && frame.hasKey) {
+					state.position = frame.keyPosition;
+					throwError$1(state, "incomplete mapping pair in event stream");
+				}
 				if (frame.kind === "document") state.documents.push(frame.value);
 				else {
 					const value = frame.tag.carrierIsResult ? frame.value : finalizeCollection(state, frame.position, frame.tag, frame.value);
@@ -56662,7 +55730,7 @@ var DEFAULT_PARSER_OPTIONS = {
 };
 function addDocumentEvent(state, explicitStart, explicitEnd) {
 	state.events.push({
-		type: 1,
+		type: EVENT_ID.DOCUMENT,
 		explicitStart,
 		explicitEnd,
 		directives: state.directives
@@ -56670,7 +55738,7 @@ function addDocumentEvent(state, explicitStart, explicitEnd) {
 }
 function addSequenceEvent(state, start, anchorStart, anchorEnd, tagStart, tagEnd, style) {
 	state.events.push({
-		type: 2,
+		type: EVENT_ID.SEQUENCE,
 		start,
 		anchorStart,
 		anchorEnd,
@@ -56681,7 +55749,7 @@ function addSequenceEvent(state, start, anchorStart, anchorEnd, tagStart, tagEnd
 }
 function addMappingEvent(state, start, anchorStart, anchorEnd, tagStart, tagEnd, style) {
 	state.events.push({
-		type: 3,
+		type: EVENT_ID.MAPPING,
 		start,
 		anchorStart,
 		anchorEnd,
@@ -56690,9 +55758,20 @@ function addMappingEvent(state, start, anchorStart, anchorEnd, tagStart, tagEnd,
 		style
 	});
 }
-function addScalarEvent(state, valueStart, valueEnd, anchorStart, anchorEnd, tagStart, tagEnd, style, chomping = 1, indent = -1, fast = false) {
+function insertFlowPairMappingEvent(state, snapshot) {
+	state.events.splice(snapshot.eventsLength, 0, {
+		type: EVENT_ID.MAPPING,
+		start: snapshot.position,
+		anchorStart: NO_RANGE$1,
+		anchorEnd: NO_RANGE$1,
+		tagStart: NO_RANGE$1,
+		tagEnd: NO_RANGE$1,
+		style: COLLECTION_STYLE.FLOW
+	});
+}
+function addScalarEvent(state, valueStart, valueEnd, anchorStart, anchorEnd, tagStart, tagEnd, style, chomping = CHOMPING_MODE.CLIP, indent = -1, fast = false) {
 	state.events.push({
-		type: 4,
+		type: EVENT_ID.SCALAR,
 		valueStart,
 		valueEnd,
 		anchorStart,
@@ -56707,16 +55786,16 @@ function addScalarEvent(state, valueStart, valueEnd, anchorStart, anchorEnd, tag
 }
 function addAliasEvent(state, anchorStart, anchorEnd) {
 	state.events.push({
-		type: 5,
+		type: EVENT_ID.ALIAS,
 		anchorStart,
 		anchorEnd
 	});
 }
 function addPopEvent(state) {
-	state.events.push({ type: 6 });
+	state.events.push({ type: EVENT_ID.POP });
 }
 function addEmptyScalarEvent(state) {
-	addScalarEvent(state, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, 1);
+	addScalarEvent(state, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, SCALAR_STYLE.PLAIN);
 }
 function emptyProperties() {
 	return {
@@ -56745,7 +55824,7 @@ function restoreState(state, snapshot) {
 	state.events.length = snapshot.eventsLength;
 }
 function throwError(state, message) {
-	throwErrorAt(state.input.slice(0, state.length), state.position, message, state.filename);
+	YAMLException.throwAt(state.input.slice(0, state.length), state.position, message, state.filename);
 }
 function isEol(c) {
 	return c === 10 || c === 13;
@@ -56824,12 +55903,34 @@ function testDocumentSeparator(state, position = state.position) {
 	}
 	return false;
 }
+function skipByteOrderMark(state) {
+	if (state.position === state.lineStart && state.input.charCodeAt(state.position) === 65279) {
+		state.position++;
+		state.lineStart = state.position;
+	}
+}
+function testDocumentBoundary(state) {
+	if (state.position !== state.lineStart) return false;
+	if (testDocumentSeparator(state)) return true;
+	if (state.input.charCodeAt(state.position) !== 65279) return false;
+	const snapshot = snapshotState(state);
+	skipByteOrderMark(state);
+	skipSeparationSpace(state, true);
+	const ch = state.input.charCodeAt(state.position);
+	const result = state.position === state.lineStart && (ch === 37 || ch === 45 && testDocumentSeparator(state));
+	restoreState(state, snapshot);
+	return result;
+}
 function skipUntilLineEnd(state) {
 	let ch = state.input.charCodeAt(state.position);
 	while (ch !== 0 && !isEol(ch)) ch = state.input.charCodeAt(++state.position);
 }
 function checkPrintable(state, start, end) {
-	if (PATTERN_NON_PRINTABLE.test(state.input.slice(start, end))) throwError(state, "the stream contains non-printable characters");
+	const match = PATTERN_NON_PRINTABLE.exec(state.input.slice(start, end));
+	if (match !== null) {
+		state.position = start + match.index + match[0].length - 1;
+		throwError(state, "the stream contains non-printable characters");
+	}
 }
 function readTagProperty(state, props, inFlow) {
 	if (state.input.charCodeAt(state.position) !== 33) return false;
@@ -56856,12 +55957,14 @@ function readTagProperty(state, props, inFlow) {
 		state.position++;
 	} else {
 		while (ch !== 0 && !isWsOrEol(ch) && !(inFlow && isFlowIndicator(ch))) {
-			if (ch === 33) if (!isNamed) {
-				tagHandle = state.input.slice(suffixStart - 1, state.position + 1);
-				if (!PATTERN_TAG_HANDLE.test(tagHandle)) throwError(state, "named tag handle cannot contain such characters");
-				isNamed = true;
-				suffixStart = state.position + 1;
-			} else throwError(state, "tag suffix cannot contain exclamation marks");
+			if (ch === 33) {
+				if (!isNamed) {
+					tagHandle = state.input.slice(suffixStart - 1, state.position + 1);
+					if (!PATTERN_TAG_HANDLE.test(tagHandle)) throwError(state, "named tag handle cannot contain such characters");
+					isNamed = true;
+					suffixStart = state.position + 1;
+				} else throwError(state, "tag suffix cannot contain exclamation marks");
+			}
 			ch = state.input.charCodeAt(++state.position);
 		}
 		tagName = state.input.slice(suffixStart, state.position);
@@ -56913,7 +56016,7 @@ function readSingleQuotedScalar(state, nodeIndent, props) {
 			}
 			const end = state.position;
 			state.position++;
-			addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 2, 1, -1, simple);
+			addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, SCALAR_STYLE.SINGLE_QUOTED, CHOMPING_MODE.CLIP, -1, simple);
 			return true;
 		}
 		if (isEol(ch)) {
@@ -56935,7 +56038,7 @@ function readDoubleQuotedScalar(state, nodeIndent, props) {
 		if (ch === 34) {
 			const end = state.position;
 			state.position++;
-			addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 3, 1, -1, simple);
+			addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, SCALAR_STYLE.DOUBLE_QUOTED, CHOMPING_MODE.CLIP, -1, simple);
 			return true;
 		}
 		if (ch === 92) {
@@ -56963,18 +56066,18 @@ function readDoubleQuotedScalar(state, nodeIndent, props) {
 }
 function readBlockScalar(state, parentIndent, props) {
 	const ch = state.input.charCodeAt(state.position);
-	let chomping = 1;
+	let chomping = CHOMPING_MODE.CLIP;
 	let indent = -1;
 	let detectedIndent = false;
 	if (ch !== 124 && ch !== 62) return false;
-	const style = ch === 124 ? 4 : 5;
+	const style = ch === 124 ? SCALAR_STYLE.LITERAL_BLOCK : SCALAR_STYLE.FOLDED_BLOCK;
 	state.position++;
 	while (state.input.charCodeAt(state.position) !== 0) {
 		const current = state.input.charCodeAt(state.position);
 		const digit = fromDecimalCode(current);
 		if (current === 43 || current === 45) {
-			if (chomping !== 1) throwError(state, "repeat of a chomping mode identifier");
-			chomping = current === 43 ? 3 : 2;
+			if (chomping !== CHOMPING_MODE.CLIP) throwError(state, "repeat of a chomping mode identifier");
+			chomping = current === 43 ? CHOMPING_MODE.KEEP : CHOMPING_MODE.STRIP;
 			state.position++;
 		} else if (digit >= 0) {
 			if (digit === 0) throwError(state, "bad explicit indentation width of a block scalar; it cannot be less than one");
@@ -57007,14 +56110,14 @@ function readBlockScalar(state, parentIndent, props) {
 			} else if (column > 0) valueEnd = linePosition + column;
 			break;
 		}
-		if (linePosition === state.lineStart && testDocumentSeparator(state, linePosition)) break;
+		if (testDocumentBoundary(state)) break;
 		if (!detectedIndent && contentIndent === -1 && isEol(first)) maxLeadingIndent = Math.max(maxLeadingIndent, column);
 		if (!detectedIndent && contentIndent === -1 && !isEol(first)) {
 			if (first === 9 && column < parentIndent) {
 				state.position = linePosition + column;
 				throwError(state, "tab characters must not be used in indentation");
 			}
-			if (column < maxLeadingIndent) {
+			if (column >= parentIndent && column < maxLeadingIndent) {
 				state.position = linePosition + column;
 				throwError(state, "bad indentation of a mapping entry");
 			}
@@ -57045,7 +56148,7 @@ function readBlockScalar(state, parentIndent, props) {
 function canStartPlainScalar(state, nodeContext) {
 	const ch = state.input.charCodeAt(state.position);
 	const inFlow = nodeContext === CONTEXT_FLOW_IN;
-	if (ch === 0 || isWsOrEol(ch) || ch === 35 || ch === 38 || ch === 42 || ch === 33 || ch === 124 || ch === 62 || ch === 39 || ch === 34 || ch === 37 || ch === 64 || ch === 96 || inFlow && isFlowIndicator(ch)) return false;
+	if (ch === 0 || isWsOrEol(ch) || ch === 35 || ch === 38 || ch === 42 || ch === 33 || ch === 124 || ch === 62 || ch === 39 || ch === 34 || ch === 37 || ch === 64 || ch === 96 || isFlowIndicator(ch)) return false;
 	if (ch === 63 || ch === 45) {
 		const following = state.input.charCodeAt(state.position + 1);
 		if (isWsOrEolOrEnd(following) || inFlow && isFlowIndicator(following)) return false;
@@ -57060,7 +56163,7 @@ function readPlainScalar(state, nodeIndent, nodeContext, props) {
 	const inFlow = nodeContext === CONTEXT_FLOW_IN;
 	let multiline = false;
 	while (ch !== 0) {
-		if (state.position === state.lineStart && testDocumentSeparator(state)) break;
+		if (testDocumentBoundary(state)) break;
 		if (ch === 58) {
 			const following = state.input.charCodeAt(state.position + 1);
 			if (isWsOrEolOrEnd(following) || inFlow && isFlowIndicator(following)) break;
@@ -57089,7 +56192,7 @@ function readPlainScalar(state, nodeIndent, nodeContext, props) {
 	}
 	if (end === start) return false;
 	checkPrintable(state, start, end);
-	addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 1, 1, -1, !multiline);
+	addScalarEvent(state, start, end, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, SCALAR_STYLE.PLAIN, CHOMPING_MODE.CLIP, -1, !multiline);
 	return true;
 }
 function skipFlowSeparationSpace(state, nodeIndent) {
@@ -57104,8 +56207,8 @@ function readFlowCollection(state, nodeIndent, props) {
 	let readNext = true;
 	if (ch !== 91 && ch !== 123) return false;
 	const terminator = isMapping ? 125 : 93;
-	if (isMapping) addMappingEvent(state, start, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 2);
-	else addSequenceEvent(state, start, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 2);
+	if (isMapping) addMappingEvent(state, start, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, COLLECTION_STYLE.FLOW);
+	else addSequenceEvent(state, start, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, COLLECTION_STYLE.FLOW);
 	state.position++;
 	while (state.input.charCodeAt(state.position) !== 0) {
 		skipFlowSeparationSpace(state, nodeIndent);
@@ -57133,12 +56236,8 @@ function readFlowCollection(state, nodeIndent, props) {
 			state.position++;
 			skipFlowSeparationSpace(state, nodeIndent);
 			if (!isMapping) {
-				restoreState(state, entryStart);
-				addMappingEvent(state, entryStart.position, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, 2);
-				if (!parseNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)) addEmptyScalarEvent(state);
-				skipFlowSeparationSpace(state, nodeIndent);
-				state.position++;
-				skipFlowSeparationSpace(state, nodeIndent);
+				insertFlowPairMappingEvent(state, entryStart);
+				if (!keyWasRead) addEmptyScalarEvent(state);
 			} else if (!keyWasRead) addEmptyScalarEvent(state);
 			if (!parseNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)) addEmptyScalarEvent(state);
 			skipFlowSeparationSpace(state, nodeIndent);
@@ -57148,9 +56247,8 @@ function readFlowCollection(state, nodeIndent, props) {
 			addEmptyScalarEvent(state);
 		} else if (isMapping) addEmptyScalarEvent(state);
 		else if (isPair) {
-			restoreState(state, entryStart);
-			addMappingEvent(state, entryStart.position, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, NO_RANGE$1, 2);
-			parseNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
+			insertFlowPairMappingEvent(state, entryStart);
+			if (!keyWasRead) addEmptyScalarEvent(state);
 			addEmptyScalarEvent(state);
 			addPopEvent(state);
 		}
@@ -57164,7 +56262,7 @@ function readFlowCollection(state, nodeIndent, props) {
 }
 function readBlockSequence(state, nodeIndent, props) {
 	if (state.firstTabInLine !== -1 || state.input.charCodeAt(state.position) !== 45 || !isWsOrEolOrEnd(state.input.charCodeAt(state.position + 1))) return false;
-	addSequenceEvent(state, state.position, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 1);
+	addSequenceEvent(state, state.position, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, COLLECTION_STYLE.BLOCK);
 	while (state.input.charCodeAt(state.position) === 45 && isWsOrEolOrEnd(state.input.charCodeAt(state.position + 1))) {
 		if (state.firstTabInLine !== -1) {
 			state.position = state.firstTabInLine;
@@ -57200,7 +56298,7 @@ function readBlockMapping(state, nodeIndent, flowIndent, props) {
 		const entryLine = state.line;
 		if ((ch === 63 || ch === 58) && isWsOrEolOrEnd(following)) {
 			if (!mappingOpened) {
-				addMappingEvent(state, state.position, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 1);
+				addMappingEvent(state, state.position, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, COLLECTION_STYLE.BLOCK);
 				mappingOpened = true;
 			}
 			if (ch === 63) {
@@ -57229,13 +56327,16 @@ function readBlockMapping(state, nodeIndent, flowIndent, props) {
 					ch = state.input.charCodeAt(++state.position);
 					if (!isWsOrEolOrEnd(ch)) throwError(state, "a whitespace character is expected after the key-value separator within a block mapping");
 					if (!mappingOpened) {
-						restoreState(state, beforeKey);
-						addMappingEvent(state, beforeKey.position, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 1);
+						state.events.splice(beforeKey.eventsLength, 0, {
+							type: EVENT_ID.MAPPING,
+							start: beforeKey.position,
+							anchorStart: props.anchorStart,
+							anchorEnd: props.anchorEnd,
+							tagStart: props.tagStart,
+							tagEnd: props.tagEnd,
+							style: COLLECTION_STYLE.BLOCK
+						});
 						mappingOpened = true;
-						parseNode(state, flowIndent, CONTEXT_FLOW_OUT, false, true);
-						ch = state.input.charCodeAt(state.position);
-						while (isWhiteSpace(ch)) ch = state.input.charCodeAt(++state.position);
-						state.position++;
 					}
 					detected = true;
 					atExplicitKey = false;
@@ -57291,10 +56392,6 @@ function parseNode(state, parentIndent, nodeContext, allowToSeek, allowCompact, 
 		else if (state.lineIndent === parentIndent) indentStatus = 0;
 		else indentStatus = -1;
 	}
-	if (state.position === state.lineStart && testDocumentSeparator(state)) {
-		state.depth--;
-		return false;
-	}
 	if (indentStatus === 1) while (true) {
 		const ch = state.input.charCodeAt(state.position);
 		const propertyState = snapshotState(state);
@@ -57302,7 +56399,7 @@ function parseNode(state, parentIndent, nodeContext, allowToSeek, allowCompact, 
 		if (atNewLine && allowBlockStyles && (props.tagStart !== NO_RANGE$1 || props.anchorStart !== NO_RANGE$1) && (ch === 33 || ch === 38)) {
 			const fallbackState = snapshotState(state);
 			const flowIndent = parentIndent + 1;
-			if (readBlockMapping(state, state.position - state.lineStart, flowIndent, props) && state.events[fallbackState.eventsLength]?.type === 3) {
+			if (readBlockMapping(state, state.position - state.lineStart, flowIndent, props) && state.events[fallbackState.eventsLength]?.type === EVENT_ID.MAPPING) {
 				state.depth--;
 				return true;
 			}
@@ -57323,23 +56420,24 @@ function parseNode(state, parentIndent, nodeContext, allowToSeek, allowCompact, 
 	if (indentStatus === 1 || nodeContext === CONTEXT_BLOCK_OUT) {
 		const flowIndent = nodeContext === CONTEXT_FLOW_IN || nodeContext === CONTEXT_FLOW_OUT ? parentIndent : parentIndent + 1;
 		const blockIndent = state.position - state.lineStart;
-		if (indentStatus === 1) if (allowBlockCollections && (readBlockSequence(state, blockIndent, props) || readBlockMapping(state, blockIndent, flowIndent, props)) || readFlowCollection(state, flowIndent, props)) hasContent = true;
-		else {
-			const ch = state.input.charCodeAt(state.position);
-			if (propertyStart !== null && allowPropertyMapping && allowBlockStyles && !allowBlockCollections && ch !== 124 && ch !== 62) {
-				const fallbackState = snapshotState(state);
-				const propertyIndent = propertyStart.position - propertyStart.lineStart;
-				restoreState(state, propertyStart);
-				if (readBlockMapping(state, propertyIndent, flowIndent, emptyProperties()) && state.events[fallbackState.eventsLength]?.type === 3) hasContent = true;
-				else restoreState(state, fallbackState);
+		if (indentStatus === 1) {
+			if (allowBlockCollections && (readBlockSequence(state, blockIndent, props) || readBlockMapping(state, blockIndent, flowIndent, props)) || readFlowCollection(state, flowIndent, props)) hasContent = true;
+			else {
+				const ch = state.input.charCodeAt(state.position);
+				if (propertyStart !== null && allowPropertyMapping && allowBlockStyles && !allowBlockCollections && ch !== 124 && ch !== 62) {
+					const fallbackState = snapshotState(state);
+					const propertyIndent = propertyStart.position - propertyStart.lineStart;
+					restoreState(state, propertyStart);
+					if (readBlockMapping(state, propertyIndent, flowIndent, emptyProperties()) && state.events[fallbackState.eventsLength]?.type === EVENT_ID.MAPPING) hasContent = true;
+					else restoreState(state, fallbackState);
+				}
+				if (!hasContent && (allowBlockScalars && readBlockScalar(state, flowIndent, props) || readSingleQuotedScalar(state, flowIndent, props) || readDoubleQuotedScalar(state, flowIndent, props) || readAlias(state, props) || readPlainScalar(state, flowIndent, nodeContext, props))) hasContent = true;
 			}
-			if (!hasContent && (allowBlockScalars && readBlockScalar(state, flowIndent, props) || readSingleQuotedScalar(state, flowIndent, props) || readDoubleQuotedScalar(state, flowIndent, props) || readAlias(state, props) || readPlainScalar(state, flowIndent, nodeContext, props))) hasContent = true;
-		}
-		else if (indentStatus === 0) hasContent = allowBlockCollections && readBlockSequence(state, blockIndent, props);
+		} else if (indentStatus === 0) hasContent = allowBlockCollections && readBlockSequence(state, blockIndent, props);
 	}
 	allowBlockScalars = allowBlockScalars && !hasContent;
 	if (!hasContent && (props.anchorStart !== NO_RANGE$1 || props.tagStart !== NO_RANGE$1 || allowBlockScalars)) {
-		addScalarEvent(state, NO_RANGE$1, NO_RANGE$1, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, 1);
+		addScalarEvent(state, NO_RANGE$1, NO_RANGE$1, props.anchorStart, props.anchorEnd, props.tagStart, props.tagEnd, SCALAR_STYLE.PLAIN);
 		hasContent = true;
 	}
 	state.depth--;
@@ -57424,10 +56522,15 @@ function readDocument(state) {
 		}
 	}
 	const documentEvent = state.events[documentEventIndex];
-	if (documentEvent?.type === 1) documentEvent.explicitEnd = explicitEnd;
+	if (documentEvent?.type === EVENT_ID.DOCUMENT) documentEvent.explicitEnd = explicitEnd;
 	addPopEvent(state);
-	if (!explicitEnd && state.position < state.length && !(state.position === state.lineStart && testDocumentSeparator(state))) throwError(state, "end of the stream or a document separator is expected");
+	if (!explicitEnd && state.position < state.length && !testDocumentBoundary(state)) throwError(state, "end of the stream or a document separator is expected");
 }
+/**
+* Parses YAML into a flat event stream referencing source text by offsets.
+*
+* @category Events
+*/
 function parseEvents(input, options) {
 	const length = input.length;
 	const state = {
@@ -57446,9 +56549,9 @@ function parseEvents(input, options) {
 		events: []
 	};
 	const nullpos = input.indexOf("\0");
-	if (nullpos !== -1) throwErrorAt(input, nullpos, "null byte is not allowed in input", state.filename);
-	if (state.input.charCodeAt(state.position) === 65279) state.position++;
+	if (nullpos !== -1) YAMLException.throwAt(input, nullpos, "null byte is not allowed in input", state.filename);
 	while (state.position < state.length) {
+		skipByteOrderMark(state);
 		skipSeparationSpace(state, true);
 		if (state.position >= state.length) break;
 		const documentStart = state.position;
@@ -57473,8 +56576,8 @@ function loadDocuments(input, options = {}) {
 	const source = String(input);
 	const PARSER_OPT_KEYS = Object.keys(DEFAULT_PARSER_OPTIONS);
 	const CONSTRUCTOR_OPT_KEYS = Object.keys(DEFAULT_CONSTRUCTOR_OPTIONS);
-	return constructFromEvents(parseEvents(source, js_yaml_pick(opts, PARSER_OPT_KEYS)), {
-		...js_yaml_pick(opts, CONSTRUCTOR_OPT_KEYS),
+	return constructFromEvents(parseEvents(source, pick(opts, PARSER_OPT_KEYS)), {
+		...pick(opts, CONSTRUCTOR_OPT_KEYS),
 		source
 	});
 }
@@ -57486,22 +56589,42 @@ function loadAll(input, iteratorOrOptions, options) {
 	if (iterator === null) return documents;
 	for (const document of documents) iterator(document);
 }
+/**
+* Parses `string` as a single YAML document. Throws {@link YAMLException} on
+* error. This function does not understand multi-document or empty sources; it
+* throws an exception on those.
+*
+* > [!NOTE]
+* > 1. When processing untrusted input, see the
+* >    [security considerations](../docs/safety.md).
+* > 2. All exceptions MUST be caught, not just {@link YAMLException}.
+* > 3. The default {@link CORE_SCHEMA} comes without the `!!merge` tag. You can
+* >    easily enable it if needed.
+* > 4. The default {@link mapTag} is `{}`-object based, with known limitations
+* >    (see description). For full compatibility use {@link realMapTag}
+* >    instead (it uses native JS `Map`).
+*
+* @example
+* Enable {@link mergeTag} and {@link realMapTag}:
+*
+* ```javascript
+* import { load, CORE_SCHEMA, mergeTag, realMapTag } from 'js-yaml'
+*
+* try {
+*   load(data, { schema: CORE_SCHEMA.withTags(mergeTag, realMapTag) })
+* } catch (e) {
+*   console.error(e)
+* }
+* ```
+*
+* @category Main
+*/
 function load(input, options) {
 	const documents = loadDocuments(input, options);
 	if (documents.length === 0) throw new YAMLException("expected a document, but the input is empty");
 	if (documents.length === 1) return documents[0];
 	throw new YAMLException("expected a single document in the stream, but found more");
 }
-//#endregion
-//#region src/ast/nodes.ts
-var Style = class {
-	tagged = false;
-	flow = false;
-	singleQuoted = false;
-	doubleQuoted = false;
-	literal = false;
-	folded = false;
-};
 //#endregion
 //#region src/ast/from_js.ts
 var INVALID = Symbol("INVALID");
@@ -57532,9 +56655,9 @@ function buildRepresentTypes(schema) {
 function matchTag(state, object) {
 	for (let index = 0, length = state.representTypes.length; index < length; index += 1) {
 		const { tag, implicitTag } = state.representTypes[index];
-		if (tag.identify && tag.identify(object)) {
+		if (tag.identify(object)) {
 			let tagName;
-			if (tag.matchByTagPrefix && tag.representTagName) tagName = tag.representTagName(object);
+			if (tag.matchByTagPrefix) tagName = tag.representTagName(object);
 			else tagName = tag.tagName;
 			return {
 				tag,
@@ -57552,8 +56675,6 @@ function build(state, object) {
 			if (existing.anchor === void 0) existing.anchor = `ref_${state.refCounter++}`;
 			return {
 				kind: "alias",
-				tag: "",
-				style: new Style(),
 				anchor: existing.anchor
 			};
 		}
@@ -57566,24 +56687,20 @@ function build(state, object) {
 	}
 	const { tag, tagName, implicitTag } = matched;
 	const nodeTagName = implicitTag ? tagName : tagNameShort(tagName);
-	if (tag.nodeKind === "scalar") {
-		const style = new Style();
-		style.tagged = !implicitTag;
-		return {
-			kind: "scalar",
-			tag: nodeTagName,
-			style,
-			value: tag.represent(object)
-		};
-	}
+	if (tag.nodeKind === "scalar") return {
+		kind: "scalar",
+		tag: nodeTagName,
+		tagged: !implicitTag,
+		style: SCALAR_STYLE.PLAIN,
+		value: tag.represent(object)
+	};
 	if (tag.nodeKind === "sequence") {
 		const container = tag.represent(object);
-		const style = new Style();
-		style.tagged = !implicitTag;
 		const node = {
 			kind: "sequence",
 			tag: nodeTagName,
-			style,
+			tagged: !implicitTag,
+			style: COLLECTION_STYLE.BLOCK,
 			items: []
 		};
 		if (!state.noRefs) state.refs.set(object, node);
@@ -57596,12 +56713,11 @@ function build(state, object) {
 		return node;
 	}
 	const map = tag.represent(object);
-	const style = new Style();
-	style.tagged = !implicitTag;
 	const node = {
 		kind: "mapping",
 		tag: nodeTagName,
-		style,
+		tagged: !implicitTag,
+		style: COLLECTION_STYLE.BLOCK,
 		items: []
 	};
 	if (!state.noRefs) state.refs.set(object, node);
@@ -57617,6 +56733,13 @@ function build(state, object) {
 	}
 	return node;
 }
+/**
+* Convert JS object to AST. A JS value is one YAML document. An unrepresentable
+* root becomes an empty document, which the presenter renders as an empty
+* string.
+*
+* @category AST
+*/
 function jsToAst(input, schema, options = {}) {
 	const root = build({
 		representTypes: buildRepresentTypes(schema),
@@ -57632,7 +56755,17 @@ function jsToAst(input, schema, options = {}) {
 }
 //#endregion
 //#region src/ast/visit.ts
+/**
+* Return from a visitor to stop the whole traversal.
+*
+* @category AST
+*/
 var VISIT_BREAK = Symbol("visit:break");
+/**
+* Return from a visitor to skip the current node's children.
+*
+* @category AST
+*/
 var VISIT_SKIP = Symbol("visit:skip");
 function visitNode(node, visitor, ctx) {
 	const control = visitor(node, ctx);
@@ -57647,23 +56780,27 @@ function visitNode(node, visitor, ctx) {
 				isKey: false
 			})) return true;
 			break;
-		case "mapping":
-			for (const { key, value } of node.items) {
-				if (visitNode(key, visitor, {
-					depth,
-					parent: node,
-					isKey: true
-				})) return true;
-				if (visitNode(value, visitor, {
-					depth,
-					parent: node,
-					isKey: false
-				})) return true;
-			}
-			break;
+		case "mapping": for (const { key, value } of node.items) {
+			if (visitNode(key, visitor, {
+				depth,
+				parent: node,
+				isKey: true
+			})) return true;
+			if (visitNode(value, visitor, {
+				depth,
+				parent: node,
+				isKey: false
+			})) return true;
+		}
 	}
 	return false;
 }
+/**
+* Walk every node in the documents, calling {@link Visitor} once per
+* node (pre-order).
+*
+* @category AST
+*/
 function visit(documents, visitor) {
 	for (const doc of documents) if (doc.contents && visitNode(doc.contents, visitor, {
 		depth: 0,
@@ -57672,84 +56809,208 @@ function visit(documents, visitor) {
 	})) return;
 }
 //#endregion
-//#region src/ast/presenter.ts
-var CHAR_BOM = 65279;
-var CHAR_TAB = 9;
-var CHAR_LINE_FEED = 10;
-var CHAR_CARRIAGE_RETURN = 13;
-var CHAR_SPACE = 32;
-var CHAR_EXCLAMATION = 33;
-var CHAR_DOUBLE_QUOTE = 34;
-var CHAR_SHARP = 35;
-var CHAR_PERCENT = 37;
-var CHAR_AMPERSAND = 38;
-var CHAR_SINGLE_QUOTE = 39;
-var CHAR_ASTERISK = 42;
-var CHAR_COMMA = 44;
-var CHAR_MINUS = 45;
-var CHAR_COLON = 58;
-var CHAR_EQUALS = 61;
-var CHAR_GREATER_THAN = 62;
-var CHAR_QUESTION = 63;
-var CHAR_COMMERCIAL_AT = 64;
-var CHAR_LEFT_SQUARE_BRACKET = 91;
-var CHAR_RIGHT_SQUARE_BRACKET = 93;
-var CHAR_GRAVE_ACCENT = 96;
-var CHAR_LEFT_CURLY_BRACKET = 123;
-var CHAR_VERTICAL_LINE = 124;
-var CHAR_RIGHT_CURLY_BRACKET = 125;
-var ESCAPE_SEQUENCES = {};
-ESCAPE_SEQUENCES[0] = "\\0";
-ESCAPE_SEQUENCES[7] = "\\a";
-ESCAPE_SEQUENCES[8] = "\\b";
-ESCAPE_SEQUENCES[9] = "\\t";
-ESCAPE_SEQUENCES[10] = "\\n";
-ESCAPE_SEQUENCES[11] = "\\v";
-ESCAPE_SEQUENCES[12] = "\\f";
-ESCAPE_SEQUENCES[13] = "\\r";
-ESCAPE_SEQUENCES[27] = "\\e";
-ESCAPE_SEQUENCES[34] = "\\\"";
-ESCAPE_SEQUENCES[92] = "\\\\";
-ESCAPE_SEQUENCES[133] = "\\N";
-ESCAPE_SEQUENCES[160] = "\\_";
-ESCAPE_SEQUENCES[8232] = "\\L";
-ESCAPE_SEQUENCES[8233] = "\\P";
-var DEFAULT_PRESENTER_OPTIONS = {
-	indent: 2,
-	seqNoIndent: false,
-	seqInlineFirst: true,
-	sortKeys: false,
-	lineWidth: 80,
-	flowBracketPadding: false,
-	flowSkipCommaSpace: false,
-	flowSkipColonSpace: false,
-	quoteFlowKeys: false,
-	quoteStyle: "single",
-	forceQuotes: false,
-	tagBeforeAnchor: false
+//#region src/ast/styler_defaults.ts
+function hasBit(mask, bit) {
+	return (mask & 1 << bit) !== 0;
+}
+/**
+* Default scalar styling rules in application order.
+* See [Scalar styling](../../docs/scalar_styling.md) for usage details.
+*
+* @category AST
+*/
+var DEFAULT_SCALAR_STYLE_RULES = {
+	applyQuoteFlowKeysOption,
+	doubleQuoteForInvisibles,
+	doubleQuoteWhitespaceOnly,
+	applyForceQuotesOption,
+	tryLongOrMultilineAsBlock,
+	quoteInvalidPlain,
+	fallbackToDoubleQuoted
 };
-function nodeTagShort(node) {
-	return node.style.tagged ? node.tag : tagNameShort(node.tag);
+function _preferredQuotedStyle(layout) {
+	if (layout.presenterOptions.quoteStyle === "single" && hasBit(layout.allowedStylesMask, SCALAR_STYLE.SINGLE_QUOTED)) return SCALAR_STYLE.SINGLE_QUOTED;
+	return SCALAR_STYLE.DOUBLE_QUOTED;
 }
-function createPresenterState(options) {
-	const opts = {
-		...DEFAULT_PRESENTER_OPTIONS,
-		...options
-	};
-	return {
-		...opts,
-		defaultScalarTagName: opts.schema.defaultScalarTag.tagName,
-		implicitResolvers: opts.schema.implicitScalarTags
-	};
+function applyQuoteFlowKeysOption(layout) {
+	if (!layout.presenterOptions.quoteFlowKeys) return;
+	if (!layout.isKey || !layout.flowOnly || layout.style !== SCALAR_STYLE.PLAIN) return;
+	layout.style = SCALAR_STYLE.DOUBLE_QUOTED;
 }
-function encodeNonPrintable(character) {
-	const string = character.toString(16).toUpperCase();
-	const handle = character <= 255 ? "x" : "u";
-	const length = character <= 255 ? 2 : 4;
-	return `\\${handle}${"0".repeat(length - string.length)}${string}`;
+function doubleQuoteForInvisibles(layout) {
+	if (layout.style === SCALAR_STYLE.PLAIN && /[\t\x7F-\xA0\u2028\u2029\uFEFF\uFFFE\uFFFF]/.test(layout.node.value)) layout.style = SCALAR_STYLE.DOUBLE_QUOTED;
+}
+function doubleQuoteWhitespaceOnly(layout) {
+	if (layout.style === SCALAR_STYLE.PLAIN && /^\s+$/.test(layout.node.value)) layout.style = SCALAR_STYLE.DOUBLE_QUOTED;
+}
+function applyForceQuotesOption(layout) {
+	if (!layout.presenterOptions.forceQuotes) return;
+	if (layout.isKey || layout.style !== SCALAR_STYLE.PLAIN) return;
+	if (layout.node.tag !== layout.presenterOptions.schema.defaultScalarTag.tagName) return;
+	layout.style = layout.node.value.includes("\n") ? SCALAR_STYLE.DOUBLE_QUOTED : _preferredQuotedStyle(layout);
+}
+function tryLongOrMultilineAsBlock(layout) {
+	if (layout.style !== SCALAR_STYLE.PLAIN || layout.isKey) return;
+	const value = layout.node.value;
+	const multiline = value.indexOf("\n") !== -1;
+	if (!hasBit(layout.allowedStylesMask, SCALAR_STYLE.LITERAL_BLOCK)) {
+		if (multiline) layout.style = SCALAR_STYLE.DOUBLE_QUOTED;
+		return;
+	}
+	const w = layout.presenterOptions.lineWidth;
+	if (w === -1) {
+		if (multiline) layout.style = SCALAR_STYLE.LITERAL_BLOCK;
+		return;
+	}
+	const availableWidth = Math.max(Math.min(w, 40), w - layout.shiftOfContent);
+	let position = 0;
+	let shouldFold = false;
+	while (position <= value.length) {
+		let lineEnd = value.length;
+		const nextLineBreak = value.indexOf("\n", position);
+		if (nextLineBreak !== -1) lineEnd = nextLineBreak;
+		const line = value.slice(position, lineEnd);
+		if (line.length > availableWidth && line[0] !== " " && / [^ \t]/.test(line)) shouldFold = true;
+		if (nextLineBreak === -1) break;
+		position = nextLineBreak + 1;
+	}
+	if (shouldFold) layout.style = SCALAR_STYLE.FOLDED_BLOCK;
+	else if (multiline) layout.style = SCALAR_STYLE.LITERAL_BLOCK;
+}
+function quoteInvalidPlain(layout) {
+	if (layout.style === SCALAR_STYLE.PLAIN && !hasBit(layout.allowedStylesMask, SCALAR_STYLE.PLAIN)) layout.style = _preferredQuotedStyle(layout);
+}
+function fallbackToDoubleQuoted(layout) {
+	if (!hasBit(layout.allowedStylesMask, layout.style)) layout.style = SCALAR_STYLE.DOUBLE_QUOTED;
+}
+//#endregion
+//#region src/ast/scalar_styler.ts
+function setBit(mask, bit) {
+	return mask | 1 << bit;
+}
+var SRC_C_PRINTABLE = "[\\x09\\x0A\\x0D\\x20-\\x7E\\x85\\xA0-\\uD7FF\\uE000-\\uFFFD\\u{10000}-\\u{10FFFF}]";
+var SRC_B_CHAR = "[\\n\\r]";
+var SRC_C_BYTE_ORDER_MARK = "\\uFEFF";
+var SRC_S_WHITE = "[ \\t]";
+var SRC_NB_CHAR = `(?:(?!(?:${SRC_B_CHAR}|${SRC_C_BYTE_ORDER_MARK}))${SRC_C_PRINTABLE})`;
+var SRC_NS_CHAR = `(?:(?!${SRC_S_WHITE})${SRC_NB_CHAR})`;
+var SRC_NB_JSON = "[\\x09\\x20-\\uD7FF\\uE000-\\uFFFF\\u{10000}-\\u{10FFFF}]";
+var SRC_C_INDICATOR = "[-?:,\\[\\]{}#&*!|>'\"%@`]";
+var SRC_C_FLOW_INDICATOR = "[,\\[\\]{}]";
+var SRC_NS_PLAIN_SAFE_FLOW_OUT = SRC_NS_CHAR;
+var SRC_NS_PLAIN_SAFE_FLOW_IN = `(?:(?!${SRC_C_FLOW_INDICATOR})${SRC_NS_CHAR})`;
+var SRC_NS_PLAIN_FIRST_FLOW_OUT = `(?:(?:(?!${SRC_C_INDICATOR})${SRC_NS_CHAR})|[?:-](?=${SRC_NS_PLAIN_SAFE_FLOW_OUT}))`;
+var SRC_NS_PLAIN_FIRST_FLOW_IN = `(?:(?:(?!${SRC_C_INDICATOR})${SRC_NS_CHAR})|[?:-](?=${SRC_NS_PLAIN_SAFE_FLOW_IN}))`;
+var SRC_NS_PLAIN_CHAR_FLOW_OUT = `(?:(?:(?![:#])${SRC_NS_PLAIN_SAFE_FLOW_OUT})|:(?=${SRC_NS_PLAIN_SAFE_FLOW_OUT}))#*`;
+var SRC_NS_PLAIN_CHAR_FLOW_IN = `(?:(?:(?![:#])${SRC_NS_PLAIN_SAFE_FLOW_IN})|:(?=${SRC_NS_PLAIN_SAFE_FLOW_IN}))#*`;
+var SRC_NB_NS_PLAIN_IN_LINE_FLOW_OUT = `(?:${SRC_S_WHITE}*${SRC_NS_PLAIN_CHAR_FLOW_OUT})*`;
+var SRC_NB_NS_PLAIN_IN_LINE_FLOW_IN = `(?:${SRC_S_WHITE}*${SRC_NS_PLAIN_CHAR_FLOW_IN})*`;
+var SRC_NS_PLAIN_ONE_LINE_FLOW_OUT = `${SRC_NS_PLAIN_FIRST_FLOW_OUT}#*${SRC_NB_NS_PLAIN_IN_LINE_FLOW_OUT}`;
+var SRC_NS_PLAIN_ONE_LINE_FLOW_IN = `${SRC_NS_PLAIN_FIRST_FLOW_IN}#*${SRC_NB_NS_PLAIN_IN_LINE_FLOW_IN}`;
+var SRC_NS_PLAIN_ONE_LINE_BLOCK_KEY = SRC_NS_PLAIN_ONE_LINE_FLOW_OUT;
+var SRC_NS_PLAIN_ONE_LINE_FLOW_KEY = SRC_NS_PLAIN_ONE_LINE_FLOW_IN;
+var SRC_S_NS_PLAIN_NEXT_LINE_FLOW_OUT = `\\n+${SRC_NS_PLAIN_CHAR_FLOW_OUT}${SRC_NB_NS_PLAIN_IN_LINE_FLOW_OUT}`;
+var SRC_S_NS_PLAIN_NEXT_LINE_FLOW_IN = `\\n+${SRC_NS_PLAIN_CHAR_FLOW_IN}${SRC_NB_NS_PLAIN_IN_LINE_FLOW_IN}`;
+var SRC_NS_PLAIN_MULTI_LINE_FLOW_OUT = `${SRC_NS_PLAIN_ONE_LINE_FLOW_OUT}(?:${SRC_S_NS_PLAIN_NEXT_LINE_FLOW_OUT})*`;
+var SRC_NS_PLAIN_MULTI_LINE_FLOW_IN = `${SRC_NS_PLAIN_ONE_LINE_FLOW_IN}(?:${SRC_S_NS_PLAIN_NEXT_LINE_FLOW_IN})*`;
+var NS_PLAIN_FLOW_OUT = new RegExp(`^(?:${SRC_NS_PLAIN_MULTI_LINE_FLOW_OUT})$`, "u");
+var NS_PLAIN_FLOW_IN = new RegExp(`^(?:${SRC_NS_PLAIN_MULTI_LINE_FLOW_IN})$`, "u");
+var NS_PLAIN_BLOCK_KEY = new RegExp(`^(?:${SRC_NS_PLAIN_ONE_LINE_BLOCK_KEY})$`, "u");
+var NS_PLAIN_FLOW_KEY = new RegExp(`^(?:${SRC_NS_PLAIN_ONE_LINE_FLOW_KEY})$`, "u");
+var NB_SINGLE_ONE_LINE = new RegExp(`^(?:${SRC_NB_JSON})*$`, "u");
+var NB_SINGLE_MULTI_LINE = new RegExp(`^(?:${SRC_NB_JSON}|\\n)*$`, "u");
+var BLOCK_SCALAR_CONTENT = new RegExp(`^(?:${SRC_NB_CHAR}|\\n)*$`, "u");
+var C_FORBIDDEN_FIRST_LINE = /^(?:---|\.\.\.)(?=$|[ \t\n\r])/;
+var C_FORBIDDEN_CONTENT = /^(?:---|\.\.\.)(?=$|[ \t\n\r])/m;
+function canUsePlain(layout) {
+	const str = layout.node.value;
+	if (str !== "") {
+		if (!(layout.isKey ? layout.flowOnly ? NS_PLAIN_FLOW_KEY : NS_PLAIN_BLOCK_KEY : layout.flowOnly ? NS_PLAIN_FLOW_IN : NS_PLAIN_FLOW_OUT).test(str)) return false;
+		if (layout.shiftOfFirstLine === 0 && C_FORBIDDEN_FIRST_LINE.test(str)) return false;
+		if (layout.shiftOfContent === 0) {
+			const firstLineBreak = str.indexOf("\n");
+			if (firstLineBreak !== -1) {
+				const content = str.slice(firstLineBreak + 1);
+				if (C_FORBIDDEN_CONTENT.test(content)) return false;
+			}
+		}
+	}
+	const resolvedTag = layout.presenterOptions.schema.resolveImplicitScalarTag(str).tag.tagName;
+	if (!layout.node.tagged && resolvedTag !== layout.node.tag) return false;
+	if (!layout.node.tagged && str === "=" && resolvedTag === layout.presenterOptions.schema.defaultScalarTag.tagName) return false;
+	return true;
+}
+function canUseSingleQuoted(layout) {
+	const str = layout.node.value;
+	if (!(layout.isKey ? NB_SINGLE_ONE_LINE : NB_SINGLE_MULTI_LINE).test(str)) return false;
+	if (/[ \t]\n|\n[ \t]/.test(str)) return false;
+	if (!layout.isKey && layout.shiftOfContent === 0) {
+		const firstLineBreak = str.indexOf("\n");
+		if (firstLineBreak !== -1 && C_FORBIDDEN_CONTENT.test(str.slice(firstLineBreak + 1))) return false;
+	}
+	return true;
+}
+function canUseBlock(layout) {
+	if (layout.flowOnly || !BLOCK_SCALAR_CONTENT.test(layout.node.value)) return false;
+	const contentIndent = layout.shiftOfContent - layout.shiftOfParent;
+	if (contentIndent < 1) return false;
+	if (contentIndent > 9 && /^\n* /.test(layout.node.value)) return false;
+	if (layout.shiftOfContent === 0 && C_FORBIDDEN_CONTENT.test(layout.node.value)) return false;
+	return true;
+}
+function detectAllowedStyles(layout) {
+	let mask = setBit(0, SCALAR_STYLE.DOUBLE_QUOTED);
+	if (canUsePlain(layout)) mask = setBit(mask, SCALAR_STYLE.PLAIN);
+	if (canUseSingleQuoted(layout)) mask = setBit(mask, SCALAR_STYLE.SINGLE_QUOTED);
+	if (canUseBlock(layout)) mask = setBit(setBit(mask, SCALAR_STYLE.LITERAL_BLOCK), SCALAR_STYLE.FOLDED_BLOCK);
+	layout.allowedStylesMask = mask;
+}
+function renderScalar(layout) {
+	switch (layout.style) {
+		case SCALAR_STYLE.PLAIN: return renderPlain(layout);
+		case SCALAR_STYLE.SINGLE_QUOTED: return renderSingleQuoted(layout);
+		case SCALAR_STYLE.LITERAL_BLOCK: return renderLiteralBlock(layout);
+		case SCALAR_STYLE.FOLDED_BLOCK: return renderFoldedBlock(layout);
+		case SCALAR_STYLE.DOUBLE_QUOTED: return renderDoubleQuoted(layout);
+	}
+}
+function renderPlain(layout) {
+	return encodeFlowBreaks(layout.node.value, layout.shiftOfContent);
+}
+function renderSingleQuoted(layout) {
+	return `'${encodeFlowBreaks(layout.node.value, layout.shiftOfContent).replace(/'/g, "''")}'`;
+}
+function renderLiteralBlock(layout) {
+	const value = layout.node.value;
+	return "|" + blockHeader(value, layout.shiftOfParent, layout.shiftOfContent) + dropEndingNewline(indentString(value, layout.shiftOfContent));
+}
+function renderFoldedBlock(layout) {
+	const value = layout.node.value;
+	const w = layout.presenterOptions.lineWidth;
+	let availableWidth = Infinity;
+	if (w !== -1) availableWidth = Math.max(Math.min(w, 40), w - layout.shiftOfContent);
+	return ">" + blockHeader(value, layout.shiftOfParent, layout.shiftOfContent) + dropEndingNewline(indentString(foldBlockScalar(value, availableWidth), layout.shiftOfContent));
+}
+function renderDoubleQuoted(layout) {
+	return `"${escapeString(layout.node.value)}"`;
+}
+function encodeFlowBreaks(string, shiftOfContent) {
+	let nextLF = string.indexOf("\n");
+	if (nextLF === -1) return string;
+	const pad = " ".repeat(shiftOfContent);
+	let result = string.slice(0, nextLF);
+	const lineRe = /(\n+)([^\n]*)/g;
+	lineRe.lastIndex = nextLF;
+	let match;
+	while (match = lineRe.exec(string)) {
+		const breaks = match[1].length;
+		const line = match[2];
+		result += "\n".repeat(breaks + 1) + pad + line;
+	}
+	return result;
 }
 function indentString(string, spaces) {
-	const ind = " ".repeat(spaces);
+	const indent = " ".repeat(spaces);
 	let position = 0;
 	let result = "";
 	const length = string.length;
@@ -57763,191 +57024,28 @@ function indentString(string, spaces) {
 			line = string.slice(position, next + 1);
 			position = next + 1;
 		}
-		if (line.length && line !== "\n") result += ind;
+		if (line.length && line !== "\n") result += indent;
 		result += line;
 	}
 	return result;
 }
-function generateNextLine(state, level) {
-	return `\n${" ".repeat(state.indent * level)}`;
-}
-function scalarLayout(state, level) {
-	const indent = state.indent * Math.max(1, level);
-	return {
-		indent,
-		blockIndent: level === 0 ? state.indent + 1 : state.indent,
-		lineWidth: state.lineWidth === -1 ? -1 : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent)
-	};
-}
-function resolveImplicitTag(state, str) {
-	for (let index = 0, length = state.implicitResolvers.length; index < length; index += 1) {
-		const tagDefinition = state.implicitResolvers[index];
-		if (tagDefinition.resolve(str, false, tagDefinition.tagName) !== NOT_RESOLVED) return tagDefinition.tagName;
-	}
-	return state.defaultScalarTagName;
-}
-function isWhitespace(c) {
-	return c === CHAR_SPACE || c === CHAR_TAB;
-}
-function startsWithDocumentSeparator(string) {
-	const marker = string.charCodeAt(0);
-	if (marker !== CHAR_MINUS && marker !== 46 || string.charCodeAt(1) !== marker || string.charCodeAt(2) !== marker) return false;
-	if (string.length === 3) return true;
-	const following = string.charCodeAt(3);
-	return isWhitespace(following) || following === CHAR_CARRIAGE_RETURN || following === CHAR_LINE_FEED;
-}
-function isPrintable(c) {
-	return c >= 32 && c <= 126 || c >= 161 && c <= 55295 && c !== 8232 && c !== 8233 || c >= 57344 && c <= 65533 && c !== CHAR_BOM || c >= 65536 && c <= 1114111;
-}
-function isNsCharOrWhitespace(c) {
-	return isPrintable(c) && c !== CHAR_BOM && c !== CHAR_CARRIAGE_RETURN && c !== CHAR_LINE_FEED;
-}
-function isPlainSafe(c, prev, inblock) {
-	const cIsNsCharOrWhitespace = isNsCharOrWhitespace(c);
-	const cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c);
-	return (inblock ? cIsNsCharOrWhitespace : cIsNsCharOrWhitespace && c !== CHAR_COMMA && c !== CHAR_LEFT_SQUARE_BRACKET && c !== CHAR_RIGHT_SQUARE_BRACKET && c !== CHAR_LEFT_CURLY_BRACKET && c !== CHAR_RIGHT_CURLY_BRACKET) && c !== CHAR_SHARP && !(prev === CHAR_COLON && !cIsNsChar) || isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP || prev === CHAR_COLON && cIsNsChar;
-}
-function isPlainSafeFirst(c) {
-	return isPrintable(c) && c !== CHAR_BOM && !isWhitespace(c) && c !== CHAR_MINUS && c !== CHAR_QUESTION && c !== CHAR_COLON && c !== CHAR_COMMA && c !== CHAR_LEFT_SQUARE_BRACKET && c !== CHAR_RIGHT_SQUARE_BRACKET && c !== CHAR_LEFT_CURLY_BRACKET && c !== CHAR_RIGHT_CURLY_BRACKET && c !== CHAR_SHARP && c !== CHAR_AMPERSAND && c !== CHAR_ASTERISK && c !== CHAR_EXCLAMATION && c !== CHAR_VERTICAL_LINE && c !== CHAR_EQUALS && c !== CHAR_GREATER_THAN && c !== CHAR_SINGLE_QUOTE && c !== CHAR_DOUBLE_QUOTE && c !== CHAR_PERCENT && c !== CHAR_COMMERCIAL_AT && c !== CHAR_GRAVE_ACCENT;
-}
-function isPlainSafeAtStart(string, inblock) {
-	const first = codePointAt(string, 0);
-	if (isPlainSafeFirst(first)) return true;
-	if (string.length > 1 && (first === CHAR_MINUS || first === CHAR_QUESTION || first === CHAR_COLON)) {
-		const second = codePointAt(string, 1);
-		return !isWhitespace(second) && isPlainSafe(second, first, inblock);
-	}
-	return false;
-}
-function isPlainSafeLast(c) {
-	return !isWhitespace(c) && c !== CHAR_COLON;
-}
-function codePointAt(string, pos) {
-	const first = string.charCodeAt(pos);
-	let second;
-	if (first >= 55296 && first <= 56319 && pos + 1 < string.length) {
-		second = string.charCodeAt(pos + 1);
-		if (second >= 56320 && second <= 57343) return (first - 55296) * 1024 + second - 56320 + 65536;
-	}
-	return first;
-}
 function needIndentIndicator(string) {
 	return /^\n* /.test(string);
 }
-var STYLE_PLAIN = 1;
-var STYLE_SINGLE = 2;
-var STYLE_LITERAL = 3;
-var STYLE_FOLDED = 4;
-var STYLE_DOUBLE = 5;
-function chooseScalarStyle(state, string, layout, singleLineOnly, forceQuote, inblock) {
-	const { blockIndent, lineWidth } = layout;
-	let i;
-	let char = 0;
-	let prevChar = -1;
-	let hasLineBreak = false;
-	let hasFoldableLine = false;
-	const shouldTrackWidth = lineWidth !== -1;
-	let previousLineBreak = -1;
-	let plain = !startsWithDocumentSeparator(string) && isPlainSafeAtStart(string, inblock) && isPlainSafeLast(codePointAt(string, string.length - 1));
-	if (singleLineOnly || forceQuote) for (i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
-		char = codePointAt(string, i);
-		if (!isPrintable(char)) return STYLE_DOUBLE;
-		plain = plain && isPlainSafe(char, prevChar, inblock);
-		prevChar = char;
-	}
-	else {
-		for (i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
-			char = codePointAt(string, i);
-			if (char === CHAR_LINE_FEED) {
-				hasLineBreak = true;
-				if (shouldTrackWidth) {
-					hasFoldableLine = hasFoldableLine || i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ";
-					previousLineBreak = i;
-				}
-			} else if (!isPrintable(char)) return STYLE_DOUBLE;
-			plain = plain && isPlainSafe(char, prevChar, inblock);
-			prevChar = char;
-		}
-		hasFoldableLine = hasFoldableLine || shouldTrackWidth && i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ";
-	}
-	if (!hasLineBreak && !hasFoldableLine) {
-		if (plain && !forceQuote) return STYLE_PLAIN;
-		return state.quoteStyle === "double" ? STYLE_DOUBLE : STYLE_SINGLE;
-	}
-	if (blockIndent > 9 && needIndentIndicator(string)) return STYLE_DOUBLE;
-	return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL;
-}
-function renderScalarStyle(string, style, layout) {
-	const { indent, blockIndent, lineWidth } = layout;
-	switch (style) {
-		case STYLE_PLAIN: return encodeFlowBreaks(string, indent);
-		case STYLE_SINGLE: return `'${encodeFlowBreaks(string, indent).replace(/'/g, "''")}'`;
-		case STYLE_LITERAL: return "|" + blockHeader(string, blockIndent) + dropEndingNewline(indentString(string, indent));
-		case STYLE_FOLDED: return ">" + blockHeader(string, blockIndent) + dropEndingNewline(indentString(foldBlockScalar(string, lineWidth), indent));
-		case STYLE_DOUBLE: return `"${escapeString(string)}"`;
-	}
-}
-function resolveScalarStyle(state, node, layout, iskey, inblock) {
-	const singleLineOnly = iskey || !inblock;
-	if (node.style.singleQuoted) return STYLE_SINGLE;
-	if (node.style.doubleQuoted) return STYLE_DOUBLE;
-	if (!singleLineOnly) {
-		if (node.style.literal) return STYLE_LITERAL;
-		if (node.style.folded) return STYLE_FOLDED;
-	}
-	const string = node.value;
-	if (string.length === 0) {
-		if (node.style.tagged || resolveImplicitTag(state, string) === node.tag) return STYLE_PLAIN;
-		return state.quoteStyle === "double" ? STYLE_DOUBLE : STYLE_SINGLE;
-	}
-	const style = chooseScalarStyle(state, string, layout, singleLineOnly, state.forceQuotes && !iskey, inblock);
-	if (style === STYLE_PLAIN && !node.style.tagged && resolveImplicitTag(state, string) !== node.tag) return state.quoteStyle === "double" ? STYLE_DOUBLE : STYLE_SINGLE;
-	return style;
-}
-function blockHeader(string, indentPerLevel) {
-	const indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : "";
+function blockHeader(string, shiftOfParent, shiftOfContent) {
+	const indentIndicator = needIndentIndicator(string) ? String(shiftOfContent - shiftOfParent) : "";
 	const clip = string[string.length - 1] === "\n";
 	return `${indentIndicator}${clip && (string[string.length - 2] === "\n" || string === "\n") ? "+" : clip ? "" : "-"}\n`;
-}
-function encodeFlowBreaks(string, indent) {
-	let nextLF = string.indexOf("\n");
-	if (nextLF === -1) return string;
-	const pad = " ".repeat(indent);
-	let result = string.slice(0, nextLF);
-	const lineRe = /(\n+)([^\n]*)/g;
-	lineRe.lastIndex = nextLF;
-	let match;
-	while (match = lineRe.exec(string)) {
-		const breaks = match[1].length;
-		const line = match[2];
-		result += "\n".repeat(breaks + 1) + pad + line;
-	}
-	return result;
 }
 function dropEndingNewline(string) {
 	return string[string.length - 1] === "\n" ? string.slice(0, -1) : string;
 }
-function foldBlockScalar(string, width) {
-	const lineRe = /(\n+)([^\n]*)/g;
-	let nextLF = string.indexOf("\n");
-	if (nextLF === -1) nextLF = string.length;
-	lineRe.lastIndex = nextLF;
-	let result = foldLine(string.slice(0, nextLF), width);
-	let prevMoreIndented = string[0] === "\n" || string[0] === " ";
-	let moreIndented;
-	let match;
-	while (match = lineRe.exec(string)) {
-		const prefix = match[1];
-		const line = match[2];
-		moreIndented = line[0] === " ";
-		result += prefix + (!prevMoreIndented && !moreIndented && line !== "" ? "\n" : "") + foldLine(line, width);
-		prevMoreIndented = moreIndented;
-	}
-	return result;
+function isMoreIndented(char) {
+	return char === " " || char === "	";
 }
 function foldLine(line, width) {
-	if (line === "" || line[0] === " ") return line;
-	const breakRe = / [^ ]/g;
+	if (line === "" || isMoreIndented(line[0])) return line;
+	const breakRe = / [^ \t]/g;
 	let match;
 	let start = 0;
 	let end;
@@ -57968,43 +57066,119 @@ function foldLine(line, width) {
 	else result += line.slice(start);
 	return result.slice(1);
 }
-function escapeString(string) {
-	let result = "";
-	let char = 0;
-	for (let i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
-		char = codePointAt(string, i);
-		const escapeSeq = ESCAPE_SEQUENCES[char];
-		if (escapeSeq) {
-			result += escapeSeq;
-			continue;
-		}
-		if (isPrintable(char)) {
-			result += string[i];
-			if (char >= 65536) result += string[i + 1];
-			continue;
-		}
-		result += encodeNonPrintable(char);
+function foldBlockScalar(string, width) {
+	const lineRe = /(\n+)([^\n]*)/g;
+	let nextLF = string.indexOf("\n");
+	if (nextLF === -1) nextLF = string.length;
+	lineRe.lastIndex = nextLF;
+	let result = foldLine(string.slice(0, nextLF), width);
+	let prevMoreIndented = string[0] === "\n" || isMoreIndented(string[0]);
+	let moreIndented;
+	let match;
+	while (match = lineRe.exec(string)) {
+		const prefix = match[1];
+		const line = match[2];
+		moreIndented = line !== "" && isMoreIndented(line[0]);
+		result += prefix + (!prevMoreIndented && !moreIndented && line !== "" ? "\n" : "") + foldLine(line, width);
+		prevMoreIndented = moreIndented;
 	}
 	return result;
+}
+var CHARACTERS_TO_ESCAPE = /["\\\x00-\x1F\x7F-\xA0\u2028\u2029\uD800-\uDFFF\uFEFF\uFFFE\uFFFF]/gu;
+function escapeCharacter(character) {
+	switch (character) {
+		case "\0": return "\\0";
+		case "\x07": return "\\a";
+		case "\b": return "\\b";
+		case "	": return "\\t";
+		case "\n": return "\\n";
+		case "\v": return "\\v";
+		case "\f": return "\\f";
+		case "\r": return "\\r";
+		case "\x1B": return "\\e";
+		case "\"": return "\\\"";
+		case "\\": return "\\\\";
+		case "": return "\\N";
+		case "\xA0": return "\\_";
+		case "\u2028": return "\\L";
+		case "\u2029": return "\\P";
+	}
+	const code = character.charCodeAt(0);
+	const hex = code.toString(16).toUpperCase();
+	if (code <= 255) return `\\x${"0".repeat(2 - hex.length)}${hex}`;
+	return `\\u${"0".repeat(4 - hex.length)}${hex}`;
+}
+function escapeString(string) {
+	return string.replace(CHARACTERS_TO_ESCAPE, escapeCharacter);
+}
+//#endregion
+//#region src/ast/presenter.ts
+var CHAR_LINE_FEED = 10;
+var DEFAULT_PRESENTER_OPTIONS = {
+	indent: 2,
+	seqNoIndent: false,
+	seqInlineFirst: true,
+	lineWidth: 80,
+	flowBracketPadding: false,
+	flowSkipCommaSpace: false,
+	flowSkipColonSpace: false,
+	quoteFlowKeys: false,
+	quoteStyle: "single",
+	forceQuotes: false,
+	scalarStyleRules: Object.keys(DEFAULT_SCALAR_STYLE_RULES).map((name) => Reflect.get(DEFAULT_SCALAR_STYLE_RULES, name)),
+	tagBeforeAnchor: false
+};
+function nodeTagShort(node) {
+	return node.tagged ? node.tag : tagNameShort(node.tag);
+}
+function createPresenterState(options) {
+	const opts = {
+		...DEFAULT_PRESENTER_OPTIONS,
+		...options
+	};
+	if (opts.flowSkipColonSpace) opts.quoteFlowKeys = true;
+	return {
+		...opts,
+		defaultScalarTagName: opts.schema.defaultScalarTag.tagName,
+		openEnded: false
+	};
+}
+function generateNextLine(state, level) {
+	return `\n${" ".repeat(state.indent * level)}`;
+}
+function scalarLayout(state, node, parent, level, isKey, flowOnly) {
+	return {
+		node,
+		parent,
+		level,
+		isKey,
+		flowOnly,
+		shiftOfParent: level === 0 ? -1 : state.indent * (level - 1),
+		shiftOfContent: state.indent * Math.max(1, level),
+		shiftOfFirstLine: level === 0 ? 0 : state.indent * level,
+		presenterOptions: state,
+		allowedStylesMask: 0,
+		style: node.style
+	};
 }
 function writeFlowSequence(state, level, node) {
 	let result = "";
 	for (let index = 0, length = node.items.length; index < length; index += 1) {
-		const item = writeNode(state, level, node.items[index], {});
-		if (result !== "") result += `,${!state.flowSkipCommaSpace ? " " : ""}`;
+		const item = writeNode(state, level, node.items[index], node, {}).text;
+		if (index > 0) result += `,${!state.flowSkipCommaSpace ? " " : ""}`;
 		result += item;
 	}
-	const pad = state.flowBracketPadding && result !== "" ? " " : "";
+	const pad = state.flowBracketPadding && node.items.length > 0 ? " " : "";
 	return `[${pad}${result}${pad}]`;
 }
 function writeBlockSequence(state, level, node, compact) {
 	let result = "";
 	for (let index = 0, length = node.items.length; index < length; index += 1) {
-		const item = writeNode(state, level + 1, node.items[index], {
+		const item = writeNode(state, level + 1, node.items[index], node, {
 			block: true,
 			compact: state.seqInlineFirst,
 			isblockseq: true
-		});
+		}).text;
 		if (!compact || result !== "") result += generateNextLine(state, level);
 		if (item === "" || CHAR_LINE_FEED === item.charCodeAt(0)) result += "-";
 		else result += "- ";
@@ -58014,70 +57188,53 @@ function writeBlockSequence(state, level, node, compact) {
 }
 function writeFlowMapping(state, level, node) {
 	let result = "";
-	const items = sortMappingItems(state, node.items);
-	for (const { key, value } of items) {
+	for (const { key, value } of node.items) {
 		let pairBuffer = "";
 		if (result !== "") pairBuffer += `,${!state.flowSkipCommaSpace ? " " : ""}`;
-		const keyText = writeNode(state, level, key, { iskey: true });
-		const explicitPair = keyText.length > 1024;
-		if (explicitPair) pairBuffer += "? ";
-		else if (state.quoteFlowKeys) pairBuffer += "\"";
-		const valueText = writeNode(state, level, value, {});
+		const keyRender = writeNode(state, level, key, node, { iskey: true });
+		const keyText = keyRender.text;
+		const valueText = writeNode(state, level, value, node, {}).text;
 		const sep = state.flowSkipColonSpace || valueText === "" ? "" : " ";
-		pairBuffer += `${keyText}${state.quoteFlowKeys && !explicitPair ? "\"" : ""}:${sep}${valueText}`;
+		const keyIsBareProps = key.kind === "scalar" && keyRender.noBody && (key.tagged || key.anchor !== void 0);
+		const keyColonSep = key.kind === "alias" || keyIsBareProps ? " " : "";
+		pairBuffer += `${keyText}${keyColonSep}:${sep}${valueText}`;
 		result += pairBuffer;
 	}
 	const pad = state.flowBracketPadding && result !== "" ? " " : "";
 	return `{${pad}${result}${pad}}`;
 }
-function sortKeyValue(key) {
-	return key.kind === "scalar" ? key.value : key;
-}
-function sortMappingItems(state, items) {
-	if (!state.sortKeys) return items;
-	const copy = items.slice();
-	if (state.sortKeys === true) copy.sort((a, b) => {
-		const x = sortKeyValue(a.key);
-		const y = sortKeyValue(b.key);
-		if (x < y) return -1;
-		if (x > y) return 1;
-		return 0;
-	});
-	else {
-		const fn = state.sortKeys;
-		copy.sort((a, b) => fn(sortKeyValue(a.key), sortKeyValue(b.key)));
-	}
-	return copy;
-}
 function writeBlockMapping(state, level, node, compact) {
 	let result = "";
-	const items = sortMappingItems(state, node.items);
-	for (let index = 0, length = items.length; index < length; index += 1) {
+	for (let index = 0, length = node.items.length; index < length; index += 1) {
 		let pairBuffer = "";
 		if (!compact || result !== "") pairBuffer += generateNextLine(state, level);
-		const { key, value } = items[index];
-		const keyIsBlock = (key.kind === "mapping" || key.kind === "sequence") && !key.style.flow && key.items.length !== 0 || key.kind === "scalar" && (key.style.literal || key.style.folded);
-		const keyText = keyIsBlock ? writeNode(state, level + 1, key, {
+		const { key, value } = node.items[index];
+		const keyIsBlock = (key.kind === "mapping" || key.kind === "sequence") && key.style === COLLECTION_STYLE.BLOCK && key.items.length !== 0 || key.kind === "scalar" && (key.style === SCALAR_STYLE.LITERAL_BLOCK || key.style === SCALAR_STYLE.FOLDED_BLOCK);
+		const keyRender = keyIsBlock ? writeNode(state, level + 1, key, node, {
 			block: true,
 			compact: true,
 			isblockseq: !cannotBeCompact(state, key, level + 1)
-		}) : writeNode(state, level + 1, key, {
+		}) : writeNode(state, level + 1, key, node, {
 			block: true,
 			compact: true,
 			iskey: true
 		});
+		const keyText = keyRender.text;
 		const keyHasLineBreak = key.kind === "scalar" && key.value.indexOf("\n") !== -1;
-		const explicitPair = keyIsBlock || keyHasLineBreak || keyText.length > 1024;
-		if (explicitPair) if (keyText && CHAR_LINE_FEED === keyText.charCodeAt(0)) pairBuffer += "?";
-		else pairBuffer += "? ";
+		const keyIsTooLong = keyText.length > 1024 && /^[\s\S]{1025}/u.test(keyText);
+		const explicitPair = keyIsBlock || keyHasLineBreak || keyIsTooLong;
+		if (explicitPair) {
+			if (keyText && CHAR_LINE_FEED === keyText.charCodeAt(0)) pairBuffer += "?";
+			else pairBuffer += "? ";
+		}
 		pairBuffer += keyText;
 		if (explicitPair) pairBuffer += generateNextLine(state, level);
-		const valueText = writeNode(state, level + 1, value, {
+		const valueText = writeNode(state, level + 1, value, node, {
 			block: true,
 			compact: explicitPair,
 			isblockseq: explicitPair && !cannotBeCompact(state, value, level + 1)
-		});
-		const keyIsBareProps = key.kind === "scalar" && key.value === "" && keyText !== "" && keyText.charCodeAt(keyText.length - 1) !== CHAR_SINGLE_QUOTE && keyText.charCodeAt(keyText.length - 1) !== CHAR_DOUBLE_QUOTE;
+		}).text;
+		const keyIsBareProps = key.kind === "scalar" && keyRender.noBody && (key.tagged || key.anchor !== void 0);
 		const keyColonSep = !explicitPair && (key.kind === "alias" || keyIsBareProps) ? " " : "";
 		if (valueText === "" || CHAR_LINE_FEED === valueText.charCodeAt(0)) pairBuffer += `${keyColonSep}:`;
 		else pairBuffer += `${keyColonSep}: `;
@@ -58087,29 +57244,44 @@ function writeBlockMapping(state, level, node, compact) {
 	return result;
 }
 function cannotBeCompact(state, node, level) {
-	return node.style.tagged || node.anchor !== void 0 || state.indent < 2 && level > 0;
+	if (node.kind === "alias") return true;
+	return node.tagged || node.anchor !== void 0 || state.indent < 2 && level > 0;
 }
-function writeNode(state, level, node, ctx) {
-	if (node.kind === "alias") return `*${node.anchor}`;
+function writeNode(state, level, node, parent, ctx) {
+	if (node.kind === "alias") {
+		state.openEnded = false;
+		return {
+			text: `*${node.anchor}`,
+			noBody: false
+		};
+	}
 	const { block = false, iskey = false, isblockseq = false } = ctx;
 	let compact = ctx.compact ?? false;
 	const hasAnchor = node.anchor !== void 0;
 	if (cannotBeCompact(state, node, level)) compact = false;
 	let body;
-	let shouldPrintTag = node.style.tagged;
-	const useBlockCollection = block && (node.kind === "mapping" || node.kind === "sequence") && !node.style.flow && node.items.length !== 0;
-	if (node.kind === "mapping") if (useBlockCollection) body = writeBlockMapping(state, level, node, compact);
-	else body = writeFlowMapping(state, level, node);
-	else if (node.kind === "sequence") if (useBlockCollection) if (state.seqNoIndent && !isblockseq && level > 0) body = writeBlockSequence(state, level - 1, node, compact);
-	else body = writeBlockSequence(state, level, node, compact);
-	else body = writeFlowSequence(state, level, node);
-	else {
-		const layout = scalarLayout(state, level);
-		const style = resolveScalarStyle(state, node, layout, iskey, block);
-		body = renderScalarStyle(node.value, style, layout);
-		shouldPrintTag = node.style.tagged || style !== STYLE_PLAIN && node.tag !== state.defaultScalarTagName;
+	let shouldPrintTag = node.tagged;
+	const useBlockCollection = block && (node.kind === "mapping" || node.kind === "sequence") && node.style === COLLECTION_STYLE.BLOCK && node.items.length !== 0;
+	if (node.kind === "mapping") {
+		if (useBlockCollection) body = writeBlockMapping(state, level, node, compact);
+		else body = writeFlowMapping(state, level, node);
+	} else if (node.kind === "sequence") {
+		if (useBlockCollection) {
+			if (state.seqNoIndent && !isblockseq && level > 0) body = writeBlockSequence(state, level - 1, node, compact);
+			else body = writeBlockSequence(state, level, node, compact);
+		} else body = writeFlowSequence(state, level, node);
+	} else {
+		const layout = scalarLayout(state, node, parent, level, iskey, !block);
+		detectAllowedStyles(layout);
+		for (const rule of state.scalarStyleRules) rule(layout);
+		body = renderScalar(layout);
+		state.openEnded = (layout.style === SCALAR_STYLE.LITERAL_BLOCK || layout.style === SCALAR_STYLE.FOLDED_BLOCK) && (node.value === "\n" || node.value.endsWith("\n\n"));
+		shouldPrintTag = node.tagged || body === "" && layout.flowOnly && parent?.kind === "sequence" && !hasAnchor || layout.style !== SCALAR_STYLE.PLAIN && node.tag !== state.defaultScalarTagName;
 	}
+	if ((node.kind === "mapping" || node.kind === "sequence") && !useBlockCollection) state.openEnded = false;
 	if (useBlockCollection && compact && level > 0 && state.indent > 2) body = `${" ".repeat(state.indent - 2)}${body}`;
+	const noBody = body === "";
+	let text = body;
 	if (shouldPrintTag || hasAnchor) {
 		const props = [];
 		const tag = shouldPrintTag ? nodeTagShort(node) : null;
@@ -58122,19 +57294,15 @@ function writeNode(state, level, node, ctx) {
 			if (tag !== null) props.push(tag);
 		}
 		const sep = body === "" || body.charCodeAt(0) === CHAR_LINE_FEED ? "" : " ";
-		body = `${props.join(" ")}${sep}${body}`;
+		text = `${props.join(" ")}${sep}${body}`;
 	}
-	return body;
+	return {
+		text,
+		noBody
+	};
 }
 function rootStartsOwnLine(node) {
-	return (node.kind === "sequence" || node.kind === "mapping") && !node.style.flow && node.items.length !== 0 && !node.style.tagged && node.anchor === void 0;
-}
-function isOpenEnded(node) {
-	let leaf = node;
-	while ((leaf.kind === "sequence" || leaf.kind === "mapping") && !leaf.style.flow && leaf.items.length !== 0) leaf = leaf.kind === "sequence" ? leaf.items[leaf.items.length - 1] : leaf.items[leaf.items.length - 1].value;
-	if (leaf.kind !== "scalar" || !(leaf.style.literal || leaf.style.folded)) return false;
-	const { value } = leaf;
-	return value.endsWith("\n\n") || value === "\n";
+	return (node.kind === "sequence" || node.kind === "mapping") && node.style === COLLECTION_STYLE.BLOCK && node.items.length !== 0 && !node.tagged && node.anchor === void 0;
 }
 function writeDocumentDirectives(doc) {
 	let result = "";
@@ -58148,12 +57316,18 @@ function writeDocumentDirectives(doc) {
 	}
 	return result;
 }
+/**
+* Build YAML from AST.
+*
+* @category AST
+*/
 function present(documents, options) {
 	const state = createPresenterState(options);
 	let result = "";
 	let previousEnded = false;
 	for (let index = 0; index < documents.length; index += 1) {
 		const doc = documents[index];
+		state.openEnded = false;
 		const directives = writeDocumentDirectives(doc);
 		const hasDirectives = directives !== "";
 		const marker = doc.explicitStart || hasDirectives || index > 0 && !previousEnded;
@@ -58161,44 +57335,47 @@ function present(documents, options) {
 		if (doc.contents === null) {
 			if (marker) result += "---\n";
 		} else if (marker) {
-			const body = writeNode(state, 0, doc.contents, {
+			const body = writeNode(state, 0, doc.contents, null, {
 				block: true,
 				compact: true
-			});
+			}).text;
 			const sep = body === "" ? "" : hasDirectives || rootStartsOwnLine(doc.contents) ? "\n" : " ";
 			result += `---${sep}${body}\n`;
-		} else result += writeNode(state, 0, doc.contents, {
+		} else result += writeNode(state, 0, doc.contents, null, {
 			block: true,
 			compact: true
-		}) + "\n";
-		previousEnded = doc.explicitEnd || doc.contents !== null && isOpenEnded(doc.contents);
+		}).text + "\n";
+		previousEnded = doc.explicitEnd || state.openEnded;
 		if (previousEnded) result += "...\n";
 	}
 	return result;
 }
 //#endregion
 //#region src/dump.ts
-var DEFAULT_DUMP_SCHEMA = YAML11_SCHEMA.withTags({
-	...intYaml11Tag,
-	resolve: (source, isExplicit, tagName) => {
-		const result = intYaml11Tag.resolve(source, isExplicit, tagName);
-		return result === NOT_RESOLVED ? intCoreTag.resolve(source, isExplicit, tagName) : result;
-	}
-}, {
-	...floatYaml11Tag,
-	resolve: (source, isExplicit, tagName) => {
-		const result = floatYaml11Tag.resolve(source, isExplicit, tagName);
-		return result === NOT_RESOLVED ? floatCoreTag.resolve(source, isExplicit, tagName) : result;
-	}
-});
 var DEFAULT_DUMP_OPTIONS = {
 	...DEFAULT_PRESENTER_OPTIONS,
-	schema: DEFAULT_DUMP_SCHEMA,
+	schema: DUMP_SCHEMA,
 	skipInvalid: false,
 	noRefs: false,
 	flowLevel: -1,
+	sortKeys: false,
 	transform: () => {}
 };
+function defaultCompareFn(a, b) {
+	const x = String(a);
+	const y = String(b);
+	if (x < y) return -1;
+	if (x > y) return 1;
+	return 0;
+}
+/**
+* Serializes JS object as a YAML document. By default it can dump every
+* supported YAML type, so it throws an exception if you try to dump regexps or
+* functions. However, you can disable exceptions by setting the
+* {@link DumpOptions.skipInvalid} option to `true`.
+*
+* @category Main
+*/
 function dump(input, options = {}) {
 	const opts = {
 		...DEFAULT_DUMP_OPTIONS,
@@ -58210,12 +57387,19 @@ function dump(input, options = {}) {
 	});
 	if (opts.flowLevel >= 0) visit(documents, (node, ctx) => {
 		if (ctx.depth < opts.flowLevel) return;
-		node.style.flow = true;
+		if (node.kind === "sequence" || node.kind === "mapping") node.style = COLLECTION_STYLE.FLOW;
 		return VISIT_SKIP;
 	});
+	if (opts.sortKeys) {
+		const compareFn = opts.sortKeys === true ? defaultCompareFn : opts.sortKeys;
+		visit(documents, (node) => {
+			if (node.kind !== "mapping") return;
+			node.items.sort((a, b) => compareFn(a.key.kind === "scalar" ? a.key.value : "", b.key.kind === "scalar" ? b.key.value : ""));
+		});
+	}
 	opts.transform(documents);
 	return present(documents, {
-		...js_yaml_pick(opts, Object.keys(DEFAULT_PRESENTER_OPTIONS)),
+		...pick(opts, Object.keys(DEFAULT_PRESENTER_OPTIONS)),
 		schema: opts.schema
 	});
 }
@@ -58235,57 +57419,38 @@ function rawTag(state, event) {
 function anchorName(state, event) {
 	return event.anchorStart === NO_RANGE ? void 0 : state.source.slice(event.anchorStart, event.anchorEnd);
 }
-function implicitScalarTagName(state, source) {
-	const { schema } = state;
-	const candidates = schema.implicitScalarByFirstChar.get(source.charAt(0)) ?? schema.implicitScalarAnyFirstChar;
-	for (const tag of candidates) if (tag.resolve(source, false, tag.tagName) !== NOT_RESOLVED) return tag.tagName;
-	return schema.defaultScalarTag.tagName;
-}
 function buildScalar(state, event) {
 	const value = getScalarValue(state.source, event);
 	const raw = rawTag(state, event);
-	const style = new Style();
-	switch (event.style) {
-		case 2:
-			style.singleQuoted = true;
-			break;
-		case 3:
-			style.doubleQuoted = true;
-			break;
-		case 4:
-			style.literal = true;
-			break;
-		case 5:
-			style.folded = true;
-			break;
-	}
 	let tag;
+	let tagged = false;
 	if (raw !== "") {
-		style.tagged = true;
+		tagged = true;
 		tag = raw;
-	} else if (event.style === 1) tag = implicitScalarTagName(state, value);
+	} else if (event.style === SCALAR_STYLE.PLAIN) tag = state.schema.resolveImplicitScalarTag(value).tag.tagName;
 	else tag = state.schema.defaultScalarTag.tagName;
 	return {
 		kind: "scalar",
 		tag,
-		style,
+		tagged,
+		style: event.style,
 		anchor: anchorName(state, event),
 		value
 	};
 }
 function buildCollection(state, event, defaultTagName) {
 	const raw = rawTag(state, event);
-	const style = new Style();
-	if (event.style === 2) style.flow = true;
 	let tag;
+	let tagged = false;
 	if (raw === "") tag = defaultTagName;
 	else {
 		tag = raw;
-		style.tagged = true;
+		tagged = true;
 	}
 	return {
 		tag,
-		style,
+		tagged,
+		style: event.style,
 		anchor: anchorName(state, event)
 	};
 }
@@ -58301,6 +57466,11 @@ function addNode(state, node) {
 		frame.key = null;
 	} else frame.key = node;
 }
+/**
+* Builds an AST from parser events
+*
+* @category AST
+*/
 function eventsToAst(events, options) {
 	const state = {
 		source: options.source,
@@ -58314,7 +57484,7 @@ function eventsToAst(events, options) {
 		const event = events[state.eventIndex++];
 		state.position = eventPosition(event);
 		switch (event.type) {
-			case 1: {
+			case EVENT_ID.DOCUMENT: {
 				const doc = {
 					contents: null,
 					explicitStart: event.explicitStart,
@@ -58327,14 +57497,15 @@ function eventsToAst(events, options) {
 				});
 				break;
 			}
-			case 4:
+			case EVENT_ID.SCALAR:
 				addNode(state, buildScalar(state, event));
 				break;
-			case 2: {
-				const { tag, style, anchor } = buildCollection(state, event, "tag:yaml.org,2002:seq");
+			case EVENT_ID.SEQUENCE: {
+				const { tag, tagged, style, anchor } = buildCollection(state, event, "tag:yaml.org,2002:seq");
 				const node = {
 					kind: "sequence",
 					tag,
+					tagged,
 					style,
 					anchor,
 					items: []
@@ -58345,11 +57516,12 @@ function eventsToAst(events, options) {
 				});
 				break;
 			}
-			case 3: {
-				const { tag, style, anchor } = buildCollection(state, event, "tag:yaml.org,2002:map");
+			case EVENT_ID.MAPPING: {
+				const { tag, tagged, style, anchor } = buildCollection(state, event, "tag:yaml.org,2002:map");
 				const node = {
 					kind: "mapping",
 					tag,
+					tagged,
 					style,
 					anchor,
 					items: []
@@ -58361,18 +57533,15 @@ function eventsToAst(events, options) {
 				});
 				break;
 			}
-			case 5: {
-				const name = state.source.slice(event.anchorStart, event.anchorEnd);
+			case EVENT_ID.ALIAS:
 				addNode(state, {
 					kind: "alias",
-					tag: "",
-					style: new Style(),
-					anchor: name
+					anchor: state.source.slice(event.anchorStart, event.anchorEnd)
 				});
 				break;
-			}
-			case 6: {
+			case EVENT_ID.POP: {
 				const frame = state.frames.pop();
+				if (frame.kind === "mapping" && frame.key) throw new Error("incomplete mapping pair in event stream");
 				if (frame.kind === "document") state.documents.push(frame.doc);
 				else addNode(state, frame.node);
 				break;
@@ -58381,6 +57550,40 @@ function eventsToAst(events, options) {
 	}
 	return state.documents;
 }
+//#endregion
+//#region src/index.ts
+/** @deprecated Use `EVENT_ID.DOCUMENT` instead. @internal */
+var EVENT_DOCUMENT = EVENT_ID.DOCUMENT;
+/** @deprecated Use `EVENT_ID.SEQUENCE` instead. @internal */
+var EVENT_SEQUENCE = EVENT_ID.SEQUENCE;
+/** @deprecated Use `EVENT_ID.MAPPING` instead. @internal */
+var EVENT_MAPPING = EVENT_ID.MAPPING;
+/** @deprecated Use `EVENT_ID.SCALAR` instead. @internal */
+var EVENT_SCALAR = EVENT_ID.SCALAR;
+/** @deprecated Use `EVENT_ID.ALIAS` instead. @internal */
+var EVENT_ALIAS = EVENT_ID.ALIAS;
+/** @deprecated Use `EVENT_ID.POP` instead. @internal */
+var EVENT_POP = EVENT_ID.POP;
+/** @deprecated Use `SCALAR_STYLE.PLAIN` instead. @internal */
+var SCALAR_STYLE_PLAIN = SCALAR_STYLE.PLAIN;
+/** @deprecated Use `SCALAR_STYLE.SINGLE_QUOTED` instead. @internal */
+var SCALAR_STYLE_SINGLE_QUOTED = SCALAR_STYLE.SINGLE_QUOTED;
+/** @deprecated Use `SCALAR_STYLE.DOUBLE_QUOTED` instead. @internal */
+var SCALAR_STYLE_DOUBLE_QUOTED = SCALAR_STYLE.DOUBLE_QUOTED;
+/** @deprecated Use `SCALAR_STYLE.LITERAL_BLOCK` instead. @internal */
+var SCALAR_STYLE_LITERAL_BLOCK = SCALAR_STYLE.LITERAL_BLOCK;
+/** @deprecated Use `SCALAR_STYLE.FOLDED_BLOCK` instead. @internal */
+var SCALAR_STYLE_FOLDED_BLOCK = SCALAR_STYLE.FOLDED_BLOCK;
+/** @deprecated Use `COLLECTION_STYLE.BLOCK` instead. @internal */
+var COLLECTION_STYLE_BLOCK = COLLECTION_STYLE.BLOCK;
+/** @deprecated Use `COLLECTION_STYLE.FLOW` instead. @internal */
+var COLLECTION_STYLE_FLOW = COLLECTION_STYLE.FLOW;
+/** @deprecated Use `CHOMPING_MODE.CLIP` instead. @internal */
+var CHOMPING_CLIP = CHOMPING_MODE.CLIP;
+/** @deprecated Use `CHOMPING_MODE.STRIP` instead. @internal */
+var CHOMPING_STRIP = CHOMPING_MODE.STRIP;
+/** @deprecated Use `CHOMPING_MODE.KEEP` instead. @internal */
+var CHOMPING_KEEP = CHOMPING_MODE.KEEP;
 //#endregion
 
 
@@ -58517,7 +57720,7 @@ async function run() {
         }
         const event = JSON.parse(external_fs_.readFileSync(eventPath, 'utf8'));
         validateBumpCommand(buildType, command);
-        await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'), dryRun);
+        const prBranch = await configureGit(git, getInput('token'), getInput('git-username'), getInput('git-useremail'), dryRun);
         const prTitle = event.pull_request?.title;
         if (!prTitle) {
             throw new Error('Pull request title not found in event payload.');
@@ -58542,10 +57745,10 @@ async function run() {
             const commitMessage = formatVersionBumpCommitMessage(getInput('commit-message'), newVersion);
             await git.commit(commitMessage);
             if (dryRun) {
-                info(`[DRY-RUN] Would push changes to origin/${getInput('pr-branch')}`);
+                info(`[DRY-RUN] Would push changes to origin/${prBranch}`);
             }
             else {
-                await git.push('origin', getInput('pr-branch'));
+                await git.push('origin', prBranch);
             }
             summary.addDetails("Version Bump", `Bumped version from ${currentVersion} to ${newVersion}`);
             setOutput('new-version', newVersion);
